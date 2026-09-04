@@ -1,0 +1,19 @@
+﻿# Dependencies / build output (covers both subprojects)
+node_modules/
+dist/
+target/
+
+# IDE
+.idea/
+*.iml
+.vscode/*
+!.vscode/extensions.json
+
+# Logs & misc
+*.log
+.DS_Store
+HELP.md
+
+# Local secrets (never commit)
+application-local.properties
+.env
