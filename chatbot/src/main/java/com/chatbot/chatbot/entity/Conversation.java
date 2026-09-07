@@ -6,6 +6,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.PrePersist;
+import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
@@ -34,6 +35,12 @@ public class Conversation {
     void onCreate() {
         this.createdAt = LocalDateTime.now();
         this.updatedAt = this.createdAt;
+    }
+
+    /** 任何 update 都刷新 updatedAt：会话列表按它倒序排，不能只靠 ChatService 手动 set。 */
+    @PreUpdate
+    void onUpdate() {
+        this.updatedAt = LocalDateTime.now();
     }
 
     public Long getId() {

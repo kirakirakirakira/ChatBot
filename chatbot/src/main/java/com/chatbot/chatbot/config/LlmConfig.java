@@ -19,7 +19,7 @@ public class LlmConfig {
     @Bean
     public LlmClient llmClient(LlmProperties props, ObjectMapper objectMapper) {
         if (props.apiKey() == null || props.apiKey().isBlank()) {
-            return new MockLlmClient();
+            return new MockLlmClient(props);
         }
         return new OpenAiCompatibleLlmClient(props, objectMapper);
     }
