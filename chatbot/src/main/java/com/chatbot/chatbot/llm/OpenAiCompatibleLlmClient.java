@@ -46,15 +46,17 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     }
 
     @Override
-    public void streamChat(List<LlmMessage> messages, LlmStreamListener listener) {
+    public void streamChat(List<LlmMessage> messages, Boolean enableThinking, LlmStreamListener listener) {
         Map<String, Object> body = new HashMap<>();
         body.put("model", props.model());
         body.put("stream", true);
         body.put("messages", messages);
-        // 思考开关。null 表示配置里没写这一项，此时不下发该参数，
+        // 思考开关：请求体里的 enableThinking 优先（每条消息可单独开关），
+        // 没传（null）则回落到 llm.enable-thinking 配置；两者都是 null 时不下发该参数，
         // 免得直连不认识 enable_thinking 的服务商（OpenAI、DeepSeek 等）直接报 400。
-        if (props.enableThinking() != null) {
-            body.put("enable_thinking", props.enableThinking());
+        Boolean thinking = (enableThinking != null) ? enableThinking : props.enableThinking();
+        if (thinking != null) {
+            body.put("enable_thinking", thinking);
         }
 
         HttpRequest request = HttpRequest.newBuilder()

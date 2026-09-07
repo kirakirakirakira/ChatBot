@@ -7,7 +7,7 @@ import java.util.function.Consumer;
  * 本地 Mock 实现：不需要任何 API key，用于先跑通整条流式链路。
  * 配置了 llm.api-key 后，系统自动切换为真实的 OpenAI 兼容客户端。
  * <p>
- * llm.enable-thinking=true 时会先推一小段假思考，
+ * 思考开关（请求体 enableThinking，未传时用 llm.enable-thinking 配置）为 true 时会先推一小段假思考，
  * 这样没有 API Key 也能验证 reasoning 事件这条链路，顺便看前端「思考中…」的样子。
  */
 public class MockLlmClient implements LlmClient {
@@ -21,7 +21,7 @@ public class MockLlmClient implements LlmClient {
     }
 
     @Override
-    public void streamChat(List<LlmMessage> messages, LlmStreamListener listener) {
+    public void streamChat(List<LlmMessage> messages, Boolean enableThinking, LlmStreamListener listener) {
         String lastUser = "";
         for (int i = messages.size() - 1; i >= 0; i--) {
             if ("user".equals(messages.get(i).role())) {
@@ -30,7 +30,9 @@ public class MockLlmClient implements LlmClient {
             }
         }
 
-        if (Boolean.TRUE.equals(props.enableThinking())) {
+        // 请求体里的 enableThinking 优先（每条消息可单独开关），没传则回落到 llm.enable-thinking 配置
+        Boolean thinking = (enableThinking != null) ? enableThinking : props.enableThinking();
+        if (Boolean.TRUE.equals(thinking)) {
             emit(listener::onReasoning,
                     "【Mock 思考】先看用户说了什么：「" + lastUser + "」，再决定怎么组织回复。");
         }

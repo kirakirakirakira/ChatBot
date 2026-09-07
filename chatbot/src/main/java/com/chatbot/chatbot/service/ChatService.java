@@ -97,12 +97,13 @@ public class ChatService {
         emitter.onError(e -> cancelled.set(true));
         emitter.onCompletion(() -> cancelled.set(true));
 
-        executor.submit(() -> stream(conversation, emitter, cancelled, history));
+        executor.submit(() -> stream(conversation, emitter, cancelled, history, request.enableThinking()));
         return emitter;
     }
 
     private void stream(Conversation conversation, SseEmitter emitter,
-                        AtomicBoolean cancelled, List<LlmMessage> history) {
+                        AtomicBoolean cancelled, List<LlmMessage> history,
+                        Boolean enableThinking) {
         StringBuilder full = new StringBuilder();
         // 思考和回答各用一个代理字符暂存区，两条流的切分点互不影响。
         SurrogateBuffer contentBuffer = new SurrogateBuffer();
@@ -111,7 +112,7 @@ public class ChatService {
         // 计数是为了排查「思考几万字按输出计费、回答只有几个字」这类成本异常。
         AtomicLong reasoningChars = new AtomicLong();
         try {
-            llmClient.streamChat(history, new LlmStreamListener() {
+            llmClient.streamChat(history, enableThinking, new LlmStreamListener() {
                 @Override
                 public void onReasoning(String text) {
                     checkCancelled(cancelled);

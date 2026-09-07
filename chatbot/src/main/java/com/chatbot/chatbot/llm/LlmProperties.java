@@ -9,7 +9,9 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
  * @param maxHistoryMessages   每轮送给模型的最近历史条数上限，<=0 表示不限制。
  *                             原来是不管会话多长都把全部历史发过去，
  *                             几十轮之后 token 线性膨胀，最终会撞上下文窗口直接报错。
- * @param enableThinking       推理模型的思考开关，映射为请求体顶层的 enable_thinking。
+     * @param enableThinking       推理模型的思考开关默认值，映射为请求体顶层的 enable_thinking。
+     *                             单次请求可用请求体里的 enableThinking 字段覆盖（true/false）；
+     *                             请求没传时沿用此配置。
  *                             true  = 允许思考，思考增量以 SSE reasoning 事件实时推给前端；
  *                             false = 关闭思考，首字延迟从「思考完才开始」（实测约 110 秒）
  *                                     降到秒级，同时省掉思考 token
