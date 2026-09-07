@@ -4,6 +4,8 @@ import type { Conversation } from '@/types'
 defineProps<{
   conversations: Conversation[]
   activeId: number | null
+  /** false = 当前对话还是空的，禁止再新建（防止重复添加空对话）。 */
+  canCreate: boolean
 }>()
 
 const emit = defineEmits<{
@@ -30,7 +32,13 @@ function formatTime(iso: string): string {
 
 <template>
   <aside class="sidebar">
-    <button class="new-chat" type="button" @click="emit('create')">＋ 新建对话</button>
+    <button
+      class="new-chat"
+      type="button"
+      :disabled="!canCreate"
+      :title="canCreate ? '新建对话' : '当前对话还没有消息，直接发消息即可'"
+      @click="emit('create')"
+    >＋ 新建对话</button>
     <ul class="conv-list">
       <li
         v-for="c in conversations"
@@ -74,8 +82,13 @@ function formatTime(iso: string): string {
   cursor: pointer;
 }
 
-.new-chat:hover {
+.new-chat:not(:disabled):hover {
   filter: brightness(1.08);
+}
+
+.new-chat:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .conv-list {

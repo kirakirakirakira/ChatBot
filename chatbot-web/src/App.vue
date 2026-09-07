@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import ConversationSidebar from '@/components/ConversationSidebar.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import type { UiMessage } from '@/types'
@@ -21,6 +21,9 @@ const loadingMessages = ref(false)
 const thinkingOn = ref(true)
 /** 会话列表加载失败、删除失败这类全局错误，横幅展示。 */
 const fatalError = ref('')
+
+/** 新建对话的前提：没有选中对话，或选中的对话已经有消息。防止连点攒出一排空对话。 */
+const canCreateConversation = computed(() => activeId.value === null || messages.value.length > 0)
 
 let abortController: AbortController | null = null
 const scroller = ref<HTMLElement | null>(null)
@@ -68,6 +71,11 @@ async function selectConversation(id: number): Promise<void> {
 }
 
 async function newConversation(): Promise<void> {
+  // 当前对话还没有消息时不建新的：重复点「新建对话」只会攒出一排空的「新的对话」。
+  // 直接发消息即可，第一条消息就落在这个空对话里。
+  if (!canCreateConversation.value) {
+    return
+  }
   try {
     const created = await createConversation()
     await loadConversations()
@@ -204,6 +212,7 @@ onMounted(async () => {
     <ConversationSidebar
       :conversations="conversations"
       :active-id="activeId"
+      :can-create="canCreateConversation"
       @select="selectConversation"
       @create="newConversation"
       @remove="removeConversation"
