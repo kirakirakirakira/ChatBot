@@ -1,35 +1,53 @@
-@import './base.css';
+/* 全局样式：设计变量 + 页面骨架。组件级细节在各组件的 <style scoped> 里。 */
 
+:root {
+  --bg: #f7f7f8;
+  --panel: #ffffff;
+  --border: #e3e3e6;
+  --text: #1f2328;
+  --text-muted: #6b7280;
+  --accent: #10a37f;
+  --danger: #dc2626;
+  --user-bubble: #10a37f;
+  --user-bubble-text: #ffffff;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #17171a;
+    --panel: #212126;
+    --border: #3a3a40;
+    --text: #e8e8ea;
+    --text-muted: #9ca3af;
+    --accent: #10a37f;
+    --danger: #f87171;
+    --user-bubble: #0d8a6a;
+    --user-bubble-text: #ffffff;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
 #app {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 2rem;
-  font-weight: normal;
+  height: 100%;
+  margin: 0;
 }
 
-a,
-.green {
-  text-decoration: none;
-  color: hsla(160, 100%, 37%, 1);
-  transition: 0.4s;
-  padding: 3px;
+body {
+  font-family: 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  background: var(--bg);
+  color: var(--text);
 }
 
-@media (hover: hover) {
-  a:hover {
-    background-color: hsla(160, 100%, 37%, 0.2);
-  }
-}
-
-@media (min-width: 1024px) {
-  body {
-    display: flex;
-    place-items: center;
-  }
-
-  #app {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    padding: 0 2rem;
-  }
+button,
+input,
+textarea {
+  font: inherit;
+  color: inherit;
 }
