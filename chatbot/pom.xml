@@ -56,6 +56,14 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- BCrypt 密码哈希：只要 spring-security-crypto 这个轻量模块。
+             刻意不引 spring-boot-starter-security —— 它会自动接管全部请求，
+             和现有的 SSE 流式接口、自定义 AuthInterceptor 打架，配置成本远大于收益。 -->
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-crypto</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

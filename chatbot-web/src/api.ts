@@ -1,15 +1,25 @@
-import type { ChatStreamEvent, Conversation, Message } from '@/types'
+import type { ChatStreamEvent, Conversation, CurrentUser, LoginResult, Message } from '@/types'
+import { clearSession, token } from '@/auth'
 
 const BASE = '/api'
 
 /**
  * 普通 REST 请求。非 2xx 时尽量取后端 ErrorResponse 的 message 字段
  * （GlobalExceptionHandler 统一返回 {timestamp,status,error,message,path}）。
+ *
+ * 所有请求在这里统一挂 Authorization 头、统一处理 401：
+ * 401 = 本地 token 过期或被作废（比如刚改过密码），清掉登录态之后
+ * App.vue 里的 isAuthenticated 变 false，界面自动弹回登录页。
+ * 这就是「所有界面都需要权限，否则跳回登录」的兜底，不用每个页面各写一遍。
  */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(BASE + path, init)
+  const response = await fetch(BASE + path, { ...init, headers: withAuth(init?.headers) })
   if (!response.ok) {
-    throw new Error(await extractErrorMessage(response))
+    const message = await extractErrorMessage(response)
+    if (response.status === 401) {
+      clearSession()
+    }
+    throw new Error(message)
   }
   if (response.status === 204) {
     return undefined as unknown as T
@@ -25,6 +35,50 @@ async function extractErrorMessage(response: Response): Promise<string> {
   } catch {
     return fallback
   }
+}
+
+/**
+ * 给请求头加上 Authorization: Bearer <token>。
+ * 用 Headers 对象合并，兼容调用方传进来的各种 HeadersInit 形态。
+ */
+function withAuth(headers?: HeadersInit): HeadersInit {
+  const merged = new Headers(headers)
+  if (token.value) {
+    merged.set('Authorization', `Bearer ${token.value}`)
+  }
+  return merged
+}
+
+/** 登录：全站唯一不需要 token 的接口。成功后由调用方 setSession()。 */
+export function login(username: string, password: string): Promise<LoginResult> {
+  return request<LoginResult>('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+}
+
+/** 当前登录用户。前端启动时用它确认 localStorage 里的 token 是否还有效。 */
+export function fetchMe(): Promise<CurrentUser> {
+  return request<CurrentUser>('/auth/me')
+}
+
+/**
+ * 修改自己的密码。后端会换发一个新 token（旧 token 的签发时间早于
+ * password_changed_at，已经作废），所以调用方拿到结果必须 setSession()，
+ * 否则下一个请求就 401 了。
+ */
+export function changePassword(oldPassword: string, newPassword: string): Promise<LoginResult> {
+  return request<LoginResult>('/users/me/password', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ oldPassword, newPassword }),
+  })
+}
+
+/** 用户列表，仅管理员（后端 @RequireAdmin；普通用户会拿到 403）。 */
+export function listUsers(): Promise<CurrentUser[]> {
+  return request<CurrentUser[]>('/users')
 }
 
 export function createConversation(): Promise<Conversation> {
@@ -80,14 +134,18 @@ export async function streamChat(
 
   const response = await fetch(`${BASE}/conversations/${conversationId}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers: withAuth({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
     body: JSON.stringify(body),
     signal,
   })
 
   if (!response.ok || !response.body) {
-    // 还没升级成 SSE 就失败（如 404 会话不存在、400 参数校验）：响应体是 JSON 错误
-    throw new Error(await extractErrorMessage(response))
+    // 还没升级成 SSE 就失败（如 401 未登录、404 会话不存在、400 参数校验）：响应体是 JSON 错误
+    const message = await extractErrorMessage(response)
+    if (response.status === 401) {
+      clearSession()
+    }
+    throw new Error(message)
   }
 
   const reader = response.body.getReader()

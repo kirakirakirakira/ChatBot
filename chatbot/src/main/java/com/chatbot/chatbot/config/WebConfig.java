@@ -1,14 +1,35 @@
 package com.chatbot.chatbot.config;
 
+import com.chatbot.chatbot.auth.AuthInterceptor;
+import com.chatbot.chatbot.auth.CurrentUserArgumentResolver;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.servlet.config.annotation.CorsRegistry;
+import org.springframework.web.servlet.config.annotation.InterceptorRegistry;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
+import java.util.List;
+
 /**
- * 全局 CORS：前端（比如 Vite 的 5173 端口）跨域访问 /api/**。
+ * 全局 CORS + 登录拦截器 / 参数解析器注册。
  */
 @Configuration
 public class WebConfig implements WebMvcConfigurer {
+
+    /**
+     * 不需要登录就能访问的路径。只有登录接口自己 ——
+     * 连 /api/auth/me 都要登录，因为它的作用就是「验证这个 token 还有没有效」。
+     */
+    private static final String[] PUBLIC_PATHS = {"/api/auth/login"};
+
+    private final AuthInterceptor authInterceptor;
+    private final CurrentUserArgumentResolver currentUserArgumentResolver;
+
+    public WebConfig(AuthInterceptor authInterceptor,
+                     CurrentUserArgumentResolver currentUserArgumentResolver) {
+        this.authInterceptor = authInterceptor;
+        this.currentUserArgumentResolver = currentUserArgumentResolver;
+    }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
@@ -16,5 +37,23 @@ public class WebConfig implements WebMvcConfigurer {
                 .allowedOriginPatterns("*")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                 .allowedHeaders("*");
+    }
+
+    /**
+     * /api/** 一律要求登录，只有 PUBLIC_PATHS 例外。
+     * 这样新加的接口默认就是「要登录」，不用记着去某个白名单里补一行 ——
+     * 白名单越长越容易漏，漏一个就是裸奔的接口。
+     */
+    @Override
+    public void addInterceptors(InterceptorRegistry registry) {
+        registry.addInterceptor(authInterceptor)
+                .addPathPatterns("/api/**")
+                .excludePathPatterns(PUBLIC_PATHS);
+    }
+
+    /** 控制器方法里声明 CurrentUser 形参即可拿到当前登录用户。 */
+    @Override
+    public void addArgumentResolvers(List<HandlerMethodArgumentResolver> resolvers) {
+        resolvers.add(currentUserArgumentResolver);
     }
 }

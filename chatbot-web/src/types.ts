@@ -34,3 +34,23 @@ export interface UiMessage {
   /** 是否正在流式生成。 */
   streaming?: boolean
 }
+
+/** 后端返回的登录用户信息（UserVO）。没有 password 字段，哈希也不出网。 */
+export interface CurrentUser {
+  id: number
+  username: string
+  /** 0=普通用户，1=管理员，见后端 com.chatbot.chatbot.auth.Roles。 */
+  role: number
+  /** 后端给的中文角色名，直接展示，前端不用再维护一份映射。 */
+  roleLabel: string
+  createdAt: string
+}
+
+/** 登录 / 改密码成功返回的登录态（LoginResponse）。 */
+export interface LoginResult {
+  token: string
+  tokenType: string
+  /** token 有效期（秒）。 */
+  expiresIn: number
+  user: CurrentUser
+}
