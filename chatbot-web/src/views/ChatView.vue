@@ -31,6 +31,16 @@ const showUserDialog = ref(false)
 /** 新建对话的前提：没有选中对话，或选中的对话已经有消息。防止连点攒出一排空对话。 */
 const canCreateConversation = computed(() => activeId.value === null || messages.value.length > 0)
 
+/** 后端建会话时写死的默认标题；ChatService 在首条消息后会把它改成消息前 30 字。 */
+const DEFAULT_TITLE = '新的对话'
+
+/**
+ * 当前选中的对话是不是「一条消息都没有」的空对话。
+ * 只在历史加载成功后才更新：加载中或加载失败时保持 false，
+ * 否则会把「还没读出来」的对话误判成空对话删掉。
+ */
+const activeIsEmpty = ref(false)
+
 let abortController: AbortController | null = null
 const scroller = ref<HTMLElement | null>(null)
 
@@ -72,11 +82,16 @@ async function selectConversation(id: number): Promise<void> {
     return
   }
   stopStreaming()
+  // 先记下「要离开的那个对话是不是空的」：activeId 和 messages 一被覆盖就查不到了
+  const leavingId = activeId.value
+  const leavingWasEmpty = leavingId !== null && activeIsEmpty.value
   activeId.value = id
+  activeIsEmpty.value = false
   loadingMessages.value = true
   try {
     const history = await getMessages(id)
     messages.value = history.map((m) => ({ id: m.id, role: m.role, content: m.content }))
+    activeIsEmpty.value = history.length === 0
     fatalError.value = ''
     scrollToBottom()
   } catch (e) {
@@ -85,12 +100,37 @@ async function selectConversation(id: number): Promise<void> {
   } finally {
     loadingMessages.value = false
   }
+  // 切换成功后再清理空对话：切换失败时用户还停在原对话上，不能把它删了
+  if (leavingWasEmpty && leavingId !== null) {
+    await discardEmptyConversation(leavingId)
+  }
+}
+
+/**
+ * 静默删掉一个空对话（没有消息，不弹确认框，删了不丢任何东西）。
+ * 目的：点别的对话时把留下的空「新的对话」收走，侧边栏不会再攒出一排空壳。
+ * 删不掉（已经被别处删了 / 网络抖动）就算了，不打断用户正在看的对话。
+ */
+async function discardEmptyConversation(id: number): Promise<void> {
+  try {
+    await deleteConversation(id)
+    await loadConversations()
+  } catch {
+    // 空对话没删成功，最坏情况是侧边栏多一个空壳，下次切走还会再试
+  }
 }
 
 async function newConversation(): Promise<void> {
   // 当前对话还没有消息时不建新的：重复点「新建对话」只会攒出一排空的「新的对话」。
   // 直接发消息即可，第一条消息就落在这个空对话里。
   if (!canCreateConversation.value) {
+    return
+  }
+  // 列表里已经有一个空对话（比如上次刷新留下的）就直接跳过去，不建第二个。
+  // 判据是标题还等于默认值：一旦发过首条消息，后端就把标题改成消息内容了。
+  const existingEmpty = conversations.value.find((c) => c.title === DEFAULT_TITLE)
+  if (existingEmpty) {
+    await selectConversation(existingEmpty.id)
     return
   }
   try {
@@ -113,6 +153,7 @@ async function removeConversation(id: number): Promise<void> {
       stopStreaming()
       activeId.value = null
       messages.value = []
+      activeIsEmpty.value = false
     }
     await loadConversations()
     if (activeId.value === null) {
@@ -156,6 +197,7 @@ async function send(): Promise<void> {
   }
 
   input.value = ''
+  activeIsEmpty.value = false // 这条消息一发出去，它就不是空对话了，切走时不该被删
   messages.value.push({ id: null, role: 'user', content: text })
   messages.value.push({ id: null, role: 'assistant', content: '', reasoning: '', streaming: true })
   // 从数组里取回响应式代理再改：直接改 push 进去的原始对象不会触发视图更新
