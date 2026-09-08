@@ -60,13 +60,11 @@ npm run dev                     # http://localhost:5173, Vite proxies /api to :8
 
 ## Documentation Map
 
-| Topic | PROJECT_OVERVIEW.md |
-| ----- | ------------------- |
-| Module-by-module architecture | 三、后端模块详解 / 四、前端模块详解 |
-| Configuration & environment variables | 五、关键配置说明 |
-| Database schema | 六、数据库设计 |
-| Full API list | 七、API 接口汇总 |
-| Chat & auth flows | 八、核心流程 |
-| Security details (token format, password policy) | 九、安全设计要点 |
-| Dev guide (backend / frontend / default admin) | 十、开发指南 |
-| Extension points / known limitations | 十一、扩展点 / 十二、已知限制 |
+| Read this | For |
+| --------- | --- |
+| [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | 中文全量架构说明：模块清单、目录树、数据库设计、API 全量表、核心流程、安全设计、扩展点、已知限制 |
+| [chatbot/README.md](chatbot/README.md) | Backend contract: SSE event shapes, why reasoning is forwarded, cancel semantics, error body, config trade-offs |
+| [chatbot-web/README.md](chatbot-web/README.md) | Frontend conventions: Vite proxy, Node version, auth gate, SSE parsing over fetch, component map |
+
+Startup commands live in this file only; contract details live in the module READMEs only.
+Everything else points at them instead of repeating.

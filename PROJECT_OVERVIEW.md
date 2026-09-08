@@ -1,6 +1,6 @@
 # Chatbot 项目说明文档
 
-> **维护说明**：当项目发生重大架构变动（如新增模块、更换技术栈、调整目录结构、改变鉴权方式等）时，请同步更新本文档，以便后续大模型或开发者快速理解项目。
+> **维护说明**：当项目发生重大架构变动（如新增模块、更换技术栈、调整目录结构、改变鉴权方式等）时，请同步更新本文档，以便后续大模型或开发者快速理解项目。 四份文档的分工见第十节。
 
 ---
 
@@ -39,6 +39,7 @@ D:\workspace\chatbot\
 │   │   └── application-local.properties  # 本地覆盖配置
 │   ├── sql/
 │   │   └── init.sql                      # 建库建表脚本
+│   ├── README.md                         # 后端契约文档（SSE、配置取舍）
 │   └── pom.xml                           # Maven 配置
 │
 ├── chatbot-web/              # 前端项目（Vue 3）
@@ -52,7 +53,8 @@ D:\workspace\chatbot\
 │   │   ├── views/                        # 页面视图
 │   ├── package.json
 │   ├── vite.config.ts
-│   └── tsconfig.json
+│   ├── tsconfig.json
+│   └── README.md
 │
 ├── AGENTS.md                 # 大模型协作说明
 ├── README.md                 # 仓库首页：一句话简介 + 快速启动
@@ -116,11 +118,8 @@ D:\workspace\chatbot\
 | MockLlmClient | 本地 Mock 实现，未配置 api-key 时使用。 |
 | LlmProperties | LLM 配置属性：base-url、api-key、model、enable-thinking、request-timeout-seconds、max-history-messages。 |
 
-**SSE 事件类型**（ChatEvent）：
-- reasoning：思考过程增量（推理模型 + 开启思考时）
-- delta：正式回答增量
-- done：生成结束，携带 messageId
-- error：生成错误
+**SSE 事件类型**（`ChatEvent`）：`reasoning`（思考过程增量）/ `delta`（正式回答增量）/ `done`（结束，携带 messageId）/ `error`（出错）。
+完整的事件 JSON 形状、`reasoning` 不入库的语义、以及为什么必须转发思考，见 `chatbot/README.md`。
 
 ### 3.6 服务层（service/）
 
@@ -171,48 +170,30 @@ D:\workspace\chatbot\
 
 ## 五、关键配置说明
 
-### 5.1 后端配置（application.properties）
+### 5.1 后端配置
 
-```properties
-# 服务端口
-server.port=8089
+配置文件是 `chatbot/src/main/resources/application.properties`。敏感项和可调项都写成 `${环境变量:仓库内默认值}` 形式，本地覆盖用 `application-local.properties`（已 gitignore）加启动参数 `--spring.profiles.active=local`。**真实密钥不要写进会提交的文件。**
 
-# 鉴权
-auth.token-secret=YOUR_SECRET_HERE  # 生产环境必须用环境变量覆盖
-auth.token-ttl-hours=12
-auth.default-admin-username=admin
-auth.default-admin-password=admin
+| 环境变量 | 覆盖的配置项 | 仓库内默认值 |
+|----------|-------------|-------------|
+| `DB_PASSWORD` | `spring.datasource.password` | `123456`（只是本地兜底，不是真实密钥） |
+| `LLM_API_KEY` | `llm.api-key` | 空 → 回退到 `MockLlmClient` |
+| `LLM_ENABLE_THINKING` | `llm.enable-thinking` | `true` |
+| `LLM_REQUEST_TIMEOUT` | `llm.request-timeout-seconds` | `900` |
+| `LLM_MAX_HISTORY` | `llm.max-history-messages` | `20` |
+| `AUTH_TOKEN_SECRET` | `auth.token-secret` | dev 占位值，**少于 32 字符后端拒绝启动** |
+| `AUTH_TOKEN_TTL_HOURS` | `auth.token-ttl-hours` | `12` |
+| `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` | `auth.default-admin-username` / `-password` | `admin` / `admin` |
+| `SHOW_SQL` | `spring.jpa.show-sql` | `false` |
 
-# MySQL
-spring.datasource.url=jdbc:mysql://localhost:3306/chatbot
-spring.datasource.username=root
-spring.datasource.password=YOUR_PASSWORD
+`LLM_REQUEST_TIMEOUT` 和 `LLM_MAX_HISTORY` 是 properties 里显式写的占位符名，不是 Spring relaxed binding 推出来的 `LLM_REQUEST_TIMEOUT_SECONDS`。
 
-# JPA
-spring.jpa.hibernate.ddl-auto=update
-spring.jpa.show-sql=false
+每个配置项的含义与取舍（思考开关的计费代价、超时为什么是 900 秒）见 `chatbot/README.md`。
 
-# LLM（百炼 DashScope）
-llm.base-url=https://dashscope.aliyuncs.com/compatible-mode/v1
-llm.api-key=YOUR_API_KEY  # 留空则用 Mock
-llm.model=qwen3.6-flash
-llm.enable-thinking=true
-llm.request-timeout-seconds=900
-llm.max-history-messages=20
-```
+### 5.2 前端配置
 
-**敏感信息不要提交到仓库**：数据库密码、LLM API Key 等真实密钥放在 `chatbot/src/main/resources/application-local.properties`（已被 git 忽略），启动时加 `--spring.profiles.active=local`；或者直接用环境变量覆盖：
-
-| 环境变量 | 对应配置 | 说明 |
-|----------|----------|------|
-| `DB_PASSWORD` | `spring.datasource.password` | 数据库密码 |
-| `LLM_API_KEY` | `llm.api-key` | 不配置则回退到 MockLlmClient |
-| `AUTH_TOKEN_SECRET` | `auth.token-secret` | 少于 32 字符后端拒绝启动 |
-| `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` | `auth.default-admin-username` / `auth.default-admin-password` | 默认管理员账号 |
-
-### 5.2 前端配置（vite.config.ts）
-
-开发时通过 Vite proxy 将 /api 请求代理到后端 http://localhost:8089。
+`chatbot-web/vite.config.ts`：`/api` 代理到后端 `http://localhost:8089`（REST 和 SSE 都走它），路径别名 `@` → `./src`。
+Node 版本要求和其他前端约定见 `chatbot-web/README.md`。
 
 ---
 
@@ -309,32 +290,18 @@ llm.max-history-messages=20
 
 ## 十、开发指南
 
-### 10.1 启动后端
+启动步骤（建库、后端、前端、默认管理员 admin / admin）统一写在仓库根目录 `README.md`，此处不重复。
 
-```bash
-cd chatbot
-# 确保 MySQL 已启动，创建 chatbot 数据库（或依赖 ddl-auto=update）
-# 配置 LLM API Key（二选一）：
-#   方式1：编辑 src/main/resources/application-local.properties，加 llm.api-key=xxx
-#   方式2：设置环境变量 LLM_API_KEY=xxx
-./mvnw spring-boot:run
-# 访问 http://localhost:8089
-```
+四份文档的分工：
 
-### 10.2 启动前端
+| 文档 | 定位 |
+|------|------|
+| `README.md` | 门面 + 唯一的启动步骤 |
+| `PROJECT_OVERVIEW.md` | 本文档：架构全貌 |
+| `chatbot/README.md` | 后端契约：SSE 事件格式、思考转发、取消语义、错误响应体、配置取舍 |
+| `chatbot-web/README.md` | 前端实现：Vite 代理、Node 版本、登录态闸门、SSE 解析、组件清单 |
 
-```bash
-cd chatbot-web
-npm install
-npm run dev
-# 访问 http://localhost:5173（Vite 代理 /api 到后端 8089）
-```
-
-### 10.3 默认管理员
-
-- 用户名：admin
-- 密码：admin
-- **首次登录后请立即修改密码**
+原则：完整的启动步骤只在根 `README.md` 出现一次，契约与实现细节只在对应模块的 README 出现一次，本文档只做架构索引，指路不复述。
 
 ---
 
