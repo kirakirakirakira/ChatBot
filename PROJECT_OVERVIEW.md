@@ -54,7 +54,9 @@ D:\workspace\chatbot\
 │   ├── vite.config.ts
 │   └── tsconfig.json
 │
-└── AGENTS.md                 # 大模型协作说明
+├── AGENTS.md                 # 大模型协作说明
+├── README.md                 # 仓库首页：一句话简介 + 快速启动
+└── PROJECT_OVERVIEW.md       # 本文档：项目全量说明
 ```
 
 ---
@@ -199,6 +201,15 @@ llm.request-timeout-seconds=900
 llm.max-history-messages=20
 ```
 
+**敏感信息不要提交到仓库**：数据库密码、LLM API Key 等真实密钥放在 `chatbot/src/main/resources/application-local.properties`（已被 git 忽略），启动时加 `--spring.profiles.active=local`；或者直接用环境变量覆盖：
+
+| 环境变量 | 对应配置 | 说明 |
+|----------|----------|------|
+| `DB_PASSWORD` | `spring.datasource.password` | 数据库密码 |
+| `LLM_API_KEY` | `llm.api-key` | 不配置则回退到 MockLlmClient |
+| `AUTH_TOKEN_SECRET` | `auth.token-secret` | 少于 32 字符后端拒绝启动 |
+| `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` | `auth.default-admin-username` / `auth.default-admin-password` | 默认管理员账号 |
+
 ### 5.2 前端配置（vite.config.ts）
 
 开发时通过 Vite proxy 将 /api 请求代理到后端 http://localhost:8089。
@@ -209,13 +220,25 @@ llm.max-history-messages=20
 
 ### 6.1 表结构
 
-- **sys_user**：用户表（username 唯一，password 存 BCrypt 哈希，role 0=普通用户/1=管理员，password_changed_at 用于 token 失效）
-- **conversation**：会话表（title、created_at、updated_at）
-- **message**：消息表（conversation_id 外键，role 枚举 USER/ASSISTANT，content LONGTEXT，created_at）
+**sys_user（用户表）**
+
+| 字段 | 说明 |
+|------|------|
+| `username` | 登录名，唯一约束 `uk_sys_user_username` |
+| `password` | BCrypt 哈希（cost 10）。任何接口都不会返回该字段 |
+| `role` | `0`=普通用户，`1`=管理员。常量在 `auth/Roles.java`，管理员接口用 `@RequireAdmin` 标记 |
+| `created_at` | `datetime(6)` |
+| `password_changed_at` | `datetime(6)`，首次改密码前为 `NULL`。签发时间早于它的 token 一律失效，所以改密码会踢掉其他所有会话 |
+
+**conversation（会话表）**：`title`（首条消息后自动取消息前 30 字）、`created_at`、`updated_at`（会话列表按它倒序）。
+
+**message（消息表）**：`conversation_id` 外键、`role` 枚举（USER/ASSISTANT）、`content` LONGTEXT、`created_at`。
 
 ### 6.2 初始化
 
 执行 `chatbot/sql/init.sql` 建库建表，或直接启动后端（ddl-auto=update 自动建表，AdminUserInitializer 自动创建默认管理员）。
+
+`init.sql` 用 `INSERT IGNORE` 写入默认管理员，所以脚本可重复执行，且不会覆盖已经被改过的密码；`config/AdminUserInitializer.java` 在 `sys_user` 表为空时兜底重建该账号。默认 `admin` / `admin`，可用 `AUTH_ADMIN_USERNAME` / `AUTH_ADMIN_PASSWORD` 覆盖。
 
 ---
 
@@ -232,6 +255,14 @@ llm.max-history-messages=20
 | POST | /api/conversations/{id}/chat | 需要 | 发消息，SSE 流式返回 AI 回复 |
 | PUT | /api/users/me/password | 需要 | 修改自己的密码，返回新 token |
 | GET | /api/users | 管理员 | 获取所有用户列表 |
+
+**几个接口的请求/响应细节**：
+
+- `POST /api/auth/login`：请求 `{username, password}`，响应 `{token, tokenType, expiresIn, user}`。用户名不存在和密码错误返回同一句 `401` 文案。
+- `GET /api/auth/me`：前端启动时调用，用来恢复本地会话。
+- `PUT /api/users/me/password`：请求 `{oldPassword, newPassword}`，响应是一份新的 `LoginResponse`（含新 token），所以改密码不会踢掉当前会话。
+- `GET /api/users`：`@RequireAdmin`，普通用户返回 `403`。
+- 前端把任何 `401` 都当作「会话已失效」，直接切回登录页，因此不存在绕过登录就能访问的页面。
 
 ---
 
@@ -266,11 +297,13 @@ llm.max-history-messages=20
 
 ## 九、安全设计要点
 
-1. **密码**：BCrypt 哈希存储，从不存明文。登录时对「用户不存在」和「密码错」返回同一句话，防用户名枚举。
-2. **Token**：HMAC-SHA256 自签，无状态。改密码后旧 token 立即失效（通过 iat vs password_changed_at 毫秒级比较）。
-3. **防时序攻击**：登录时用预计算的 dummyHash 做 BCrypt 比对，避免「用户不存在」时响应更快。
-4. **权限**：白名单模式，新接口默认需要登录。管理员接口用 @RequireAdmin 注解。
-5. **SSE 安全**：用 fetch 而非 EventSource（支持 POST + 自定义头），token 不放 URL 查询参数。
+1. **密码**：BCrypt（cost 10）哈希存储，从不存明文，任何接口都不返回该字段。登录时对「用户不存在」和「密码错」返回同一句话，防用户名枚举。
+2. **密码策略**：新密码长度 6-64 且不能与旧密码相同；`oldPassword` 不设长度下限——种子管理员密码 `admin` 只有 5 位，加了下限就没人能改密码了。
+3. **Token 格式**：无状态自签，`base64url(payloadJson).base64url(HMAC-SHA256)`，密钥 `auth.token-secret`（少于 32 字符后端拒绝启动），有效期 `auth.token-ttl-hours`（默认 12 小时），请求头 `Authorization: Bearer <token>`。
+4. **改密码即失效**：payload 里的 `iat` 用 epoch **毫秒**而不是秒，这样「同一秒内签发的旧 token」和「改密码后换发的新 token」也能区分开；`AuthInterceptor` 比对 `iat` 与 `password_changed_at`，早于后者的 token 立即失效。
+5. **防时序攻击**：登录时用预计算的 dummyHash 做 BCrypt 比对，避免「用户不存在」时响应更快。
+6. **权限**：白名单模式，新接口默认需要登录。管理员接口用 @RequireAdmin 注解，普通用户访问返回 403。
+7. **SSE 安全**：用 fetch 而非 EventSource（支持 POST + 自定义头），token 不放 URL 查询参数。
 
 ---
 
