@@ -1,19 +1,78 @@
-﻿# Dependencies / build output (covers both subprojects)
+# ===== Dependencies / build output (covers both subprojects) =====
 node_modules/
 dist/
+dist-ssr
 target/
+build/
+!**/src/main/**/target/
+!**/src/test/**/target/
+!**/src/main/**/build/
+!**/src/test/**/build/
+coverage
+*.tsbuildinfo
 
-# IDE
+# ===== IDE / editors =====
 .idea/
 *.iml
+*.iws
+*.ipr
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# VS Code (per-directory; keep shared extensions.json)
 .vscode/*
 !.vscode/extensions.json
+chatbot/.vscode/
+chatbot-web/.vscode/*
+!chatbot-web/.vscode/extensions.json
 
-# Logs & misc
+# Eclipse / STS (backend)
+chatbot/.apt_generated
+chatbot/.classpath
+chatbot/.factorypath
+chatbot/.project
+chatbot/.settings/
+chatbot/.springBeans
+chatbot/.sts4-cache
+
+# NetBeans (backend)
+chatbot/nbproject/private/
+chatbot/nbbuild/
+chatbot/nbdist/
+chatbot/.nb-gradle/
+
+# Maven wrapper jar (backend)
+chatbot/.mvn/wrapper/maven-wrapper.jar
+
+# ===== Logs =====
 *.log
+logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ===== Frontend tooling =====
+.eslintcache
+__screenshots__/
+*.timestamp-*-*.mjs
+chatbot-web/cypress/videos/
+chatbot-web/cypress/screenshots/
+
+# ===== Misc =====
 .DS_Store
 HELP.md
+*.local
 
-# Local secrets (never commit)
+# ===== Local secrets (never commit) =====
 application-local.properties
 .env
+
+# Backend AGENTS.md (intentionally untracked)
+chatbot/AGENTS.md
+
+AGENTS.md
