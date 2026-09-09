@@ -14,10 +14,8 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     List<Message> findByConversationIdOrderByIdAsc(Long conversationId);
 
     /**
-     * 删除某会话的全部消息。
-     * 用 @Modifying + JPQL 而不是派生 deleteBy：派生删除会先把每条消息 select 出来
-     * 再逐条 delete，长会话删一次就是 2N 条 SQL。
-     * 调用方需要在事务里（ConversationService.delete 已有 @Transactional）。
+     * 删除某会话的全部消息。用 @Modifying + JPQL 而不是派生 deleteBy：
+     * 派生删除会先 select 再逐条 delete，长会话删一次就是 2N 条 SQL。调用方需自带事务。
      */
     @Modifying
     @Query("delete from Message m where m.conversation.id = :conversationId")

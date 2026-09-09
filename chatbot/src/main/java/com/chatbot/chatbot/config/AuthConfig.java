@@ -13,11 +13,8 @@ public class AuthConfig {
 
     /**
      * BCrypt（默认 strength=10）。
-     * <p>
-     * 项目只引了 spring-security-crypto 这一个模块，没有 spring-boot-starter-security，
-     * 所以不会有 Spring Security 的自动配置替我们声明这个 bean，得自己来。
-     * 这也是有意为之：完整的 Spring Security 会自动接管所有请求，
-     * 和现有的 SSE 流式接口、自定义拦截器打架，为一个登录功能不值当。
+     * 项目只引了 spring-security-crypto、没有 starter-security，所以这个 bean 得自己声明；
+     * 也是有意不让 Spring Security 自动接管全部请求，免得和 SSE 流式接口、自定义拦截器打架。
      */
     @Bean
     public PasswordEncoder passwordEncoder() {

@@ -1,15 +1,14 @@
 package com.chatbot.chatbot.auth;
 
 /**
- * 用户角色。数据库 sys_user.role 存数字（int），不存字符串：
- * 以后加角色不用改列类型，也不会像 ENUM 那样每加一个值都要 ALTER TABLE。
+ * 用户角色。sys_user.role 存 int 而非字符串/ENUM，以后加角色不用改列类型。
  */
 public final class Roles {
 
-    /** 普通用户：登录后可以用聊天相关的全部功能。 */
+    /** 普通用户：聊天相关功能全部可用。 */
     public static final int USER = 0;
 
-    /** 管理员：普通用户的能力 + 打了 @RequireAdmin 的接口（目前是 GET /api/users）。 */
+    /** 管理员：额外可访问打了 @RequireAdmin 的接口。 */
     public static final int ADMIN = 1;
 
     private Roles() {
@@ -19,7 +18,7 @@ public final class Roles {
         return role != null && role == ADMIN;
     }
 
-    /** 中文角色名由后端给出，省得前端再维护一份「0/1 分别叫什么」的映射。 */
+    /** 中文角色名由后端给出，前端不用再维护 0/1 的映射。 */
     public static String label(Integer role) {
         return isAdmin(role) ? "管理员" : "普通用户";
     }

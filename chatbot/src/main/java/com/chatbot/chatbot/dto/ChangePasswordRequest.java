@@ -5,9 +5,7 @@ import jakarta.validation.constraints.Size;
 
 /**
  * 修改自己的密码。
- * <p>
- * oldPassword 只有 @NotBlank、没有长度限制：初始管理员的密码就是 5 位的 admin，
- * 给原密码套 @Size(min = 6) 会导致 admin 永远改不了自己的密码。
+ * oldPassword 只有 @NotBlank、不限长度：初始管理员密码就是 5 位，给它套 @Size(min = 6) 会让人永远改不了密码。
  */
 public record ChangePasswordRequest(
         @NotBlank(message = "原密码不能为空") String oldPassword,

@@ -15,9 +15,7 @@ import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
 
-/**
- * 单条聊天消息。
- */
+/** 单条聊天消息。 */
 @Entity
 @Table(name = "message")
 public class Message {

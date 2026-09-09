@@ -11,9 +11,7 @@ import jakarta.persistence.Table;
 
 import java.time.LocalDateTime;
 
-/**
- * 会话（对应左侧会话列表的一项）。
- */
+/** 会话（对应左侧会话列表的一项）。 */
 @Entity
 @Table(name = "conversation")
 public class Conversation {

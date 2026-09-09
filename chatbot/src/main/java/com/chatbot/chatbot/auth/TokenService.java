@@ -15,16 +15,10 @@ import java.time.Instant;
 import java.util.Base64;
 
 /**
- * 登录 token 的签发与校验：自签的 HMAC-SHA256，形如
- * base64url(payloadJson) + "." + base64url(signature)，跟 JWT 的 HS256 一个思路。
+ * 登录 token 的签发与校验：base64url(payloadJson) + "." + base64url(签名)，HMAC-SHA256，思路同 JWT HS256。
  * <p>
- * 为什么不用 JWT 库、也不在数据库里存 session：
- * <ul>
- *   <li>不引依赖：签名只用 JDK 的 Mac，序列化用项目里已有的 Jackson；</li>
- *   <li>无状态：不用建 token 表、不用定时清过期行，后端重启也不掉登录态；</li>
- *   <li>该失效时照样能失效：payload 带 iat，配合 sys_user.password_changed_at，
- *       改完密码后旧 token 立刻作废（判断在 AuthInterceptor 里）。</li>
- * </ul>
+ * 不引 JWT 库、不在库里存 session：只用 JDK 的 Mac 和已有的 Jackson，无状态、后端重启也不掉登录态；
+ * 需要作废时靠 payload.iat 配合 sys_user.password_changed_at（判断在 AuthInterceptor）。
  */
 @Component
 public class TokenService {
@@ -35,14 +29,12 @@ public class TokenService {
     private static final int MIN_SECRET_LENGTH = 32;
 
     /**
-     * iat / exp 用 epoch 毫秒而不是秒：sys_user.password_changed_at 是 datetime(6)，
-     * 按秒比较的话，「改密码那一秒内签发的旧 token」会躲过失效判断；
-     * 而改成 <= 又会把改密码接口自己刚换发的新 token（同一秒）一起干掉。
-     * 毫秒粒度才能把这两者分开。
+     * iat / exp 用 epoch 毫秒而不是秒：只有毫秒才分得开「改密码那一秒内签发的旧 token」
+     * 和改密接口自己刚换发的新 token。
      *
-     * @param uid  用户 id，校验时会回表查一次，确认账号还在、角色没变
-     * @param iat  签发时间（epoch 毫秒），用来和 sys_user.password_changed_at 比
-     * @param exp  过期时间（epoch 毫秒）
+     * @param uid 用户 id，校验时回表确认账号还在、角色没变
+     * @param iat 签发时间（epoch 毫秒）
+     * @param exp 过期时间（epoch 毫秒）
      */
     public record TokenPayload(long uid, String username, int role, long iat, long exp) {
     }
@@ -65,7 +57,7 @@ public class TokenService {
         this.ttlSeconds = properties.tokenTtlHours() * 3600L;
     }
 
-    /** token 有效期（秒），下发给前端做展示 / 提示用。 */
+    /** token 有效期（秒），下发给前端展示用。 */
     public long ttlSeconds() {
         return ttlSeconds;
     }
@@ -79,10 +71,8 @@ public class TokenService {
     }
 
     /**
-     * 校验签名和有效期。任何一步不过都抛 401，
-     * 文案经 GlobalExceptionHandler 变成统一的 ErrorResponse JSON 给前端。
-     * <p>
-     * 注意这里只看「token 本身可不可信」，账号是否还存在 / 是否改过密码由 AuthInterceptor 回表判断。
+     * 校验签名和有效期，任何一步不过都抛 401（经 GlobalExceptionHandler 变成统一 ErrorResponse）。
+     * 这里只管 token 本身可不可信；账号是否存在、是否改过密码由 AuthInterceptor 回表判断。
      */
     public TokenPayload verify(String token) {
         int dot = token.indexOf('.');
@@ -94,8 +84,7 @@ public class TokenService {
         TokenPayload payload;
         try {
             signature = DECODER.decode(token.substring(dot + 1));
-            // Jackson 3 的异常和 Base64 的 IllegalArgumentException 都是 RuntimeException，
-            // 统一在这儿兜住：解析不了就等于凭证不可信，不必把内部异常抛给调用方。
+            // 解析不了就等于凭证不可信，统一兜成 401，不外泄内部异常
             if (!MessageDigest.isEqual(signature, sign(body))) {
                 throw unauthorized("登录凭证无效，请重新登录");
             }
@@ -109,17 +98,14 @@ public class TokenService {
         return payload;
     }
 
-    /**
-     * 常量时间比较签名（上面用的 MessageDigest.isEqual），
-     * 避免用「多久返回」逐字节猜出正确签名。
-     */
+    /** 常量时间比较签名（MessageDigest.isEqual），避免靠响应耗时逐字节猜出签名。 */
     private byte[] sign(String body) {
         try {
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
             mac.init(key);
             return mac.doFinal(body.getBytes(StandardCharsets.UTF_8));
         } catch (GeneralSecurityException e) {
-            // HmacSHA256 是 JDK 必备算法，走到这里说明环境有问题，属于启动级错误
+            // HmacSHA256 是 JDK 必备算法，走到这里说明环境有问题
             throw new IllegalStateException("token 签名失败", e);
         }
     }

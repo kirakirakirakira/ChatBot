@@ -15,25 +15,17 @@ import org.springframework.web.server.ResponseStatusException;
 import java.util.stream.Collectors;
 
 /**
- * 统一非 SSE 接口的错误响应体（ErrorResponse）。
+ * 非 SSE 接口的统一错误响应体（ErrorResponse）：{timestamp,status,error,message,path}，
+ * 前端认 status 分支、读 message 直接展示。
  * <p>
- * 之前的问题：Spring Boot 默认 server.error.include-message=never，
- * 前端遇到 404 / 400 只能拿到 {"status":404,"error":"Not Found"}，
- * 完全看不到「会话不存在: 3」这类人话文案。现在统一成
- * {timestamp,status,error,message,path}，前端读 message 直接展示。
- * <p>
- * 这里刻意不加 catch-all 的 Exception 处理器：SSE(/chat) 的错误是在异步线程里
- * 通过 ChatEvent.error 事件告诉前端的，catch-all 会试图往已经提交的
- * text/event-stream 响应里再写一份 JSON。其余异常仍然走 Spring 默认 /error，
- * 字段结构与 ErrorResponse 一致。
- * <p>
- * 每个 handler 都显式设了 Content-Type：chat 接口的 Accept 是 text/event-stream，
- * 不显式指定会因为内容协商失败变成 406，把真正的 400 盖掉。
+ * 刻意不加 catch-all 的 Exception 处理器：/chat 的错误已在异步线程里用 ChatEvent.error 发给前端，
+ * catch-all 会试图往已提交的 text/event-stream 响应里再写一份 JSON。
+ * 每个 handler 都显式设 Content-Type，否则内容协商会因为 Accept 是 text/event-stream 变成 406，把真实状态码盖掉。
  */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    /** 会话不存在（404）、方法不允许（405）等：保留原始状态码，reason 放进 message。 */
+    /** 会话不存在（404）、方法不允许（405）等：保留状态码，reason 放进 message。 */
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<ErrorResponse> handleResponseStatus(ResponseStatusException ex,
                                                               HttpServletRequest request) {
@@ -43,7 +35,7 @@ public class GlobalExceptionHandler {
         return build(status, message, request);
     }
 
-    /** @Valid 校验失败（比如 message 为空）：400 + 具体是哪个字段、为什么。 */
+    /** @Valid 校验失败：400 + 具体是哪个字段、为什么。 */
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex,
                                                           HttpServletRequest request) {

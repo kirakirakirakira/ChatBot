@@ -26,10 +26,8 @@ public class UserService {
     private final TokenService tokenService;
 
     /**
-     * 用户名不存在时也要拿它做一次 BCrypt 比对。
-     * BCrypt 是故意做慢的（单次约几十~上百毫秒），如果「用户不存在」直接返回，
-     * 攻击者光看响应快慢就能把存在的用户名一个个筛出来。
-     * 这个哈希在构造时算一次，不写死在代码里（写死就得跟着算法/强度一起维护）。
+     * 用户名不存在时也拿它做一次 BCrypt 比对：BCrypt 故意做慢，如果「用户不存在」直接返回，
+     * 攻击者光看响应快慢就能筛出存在的用户名。哈希在构造时算一次，不写死在代码里。
      */
     private final String dummyHash;
 
@@ -64,11 +62,8 @@ public class UserService {
     }
 
     /**
-     * 改自己的密码。只能改自己的：目标用户 id 来自 token（CurrentUser），
-     * 不接受请求体里传 userId，否则就是个越权改别人密码的洞。
-     * <p>
-     * 成功后返回新 token：旧 token 的 iat 早于刚写下的 password_changed_at，
-     * 会被 AuthInterceptor 判为失效；不换发新的，用户改完密码自己就先被踢下线了。
+     * 改自己的密码：目标用户 id 只来自 token（CurrentUser），不接受请求体传 userId，否则就是越权改别人密码的洞。
+     * 成功后换发新 token：旧 token 的 iat 早于刚写下的 password_changed_at，会被 AuthInterceptor 判为失效。
      */
     @Transactional
     public LoginResponse changePassword(CurrentUser currentUser, ChangePasswordRequest request) {

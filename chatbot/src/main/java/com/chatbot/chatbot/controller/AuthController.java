@@ -22,15 +22,14 @@ public class AuthController {
         this.userService = userService;
     }
 
-    /** 登录。全站唯一不需要 token 的接口（白名单见 WebConfig#addInterceptors）。 */
+    /** 登录。全站唯一不需要 token 的接口（白名单见 WebConfig）。 */
     @PostMapping("/login")
     public LoginResponse login(@Valid @RequestBody LoginRequest request) {
         return userService.login(request);
     }
 
     /**
-     * 当前登录用户。前端启动时调它验证 localStorage 里的 token 是否还有效：
-     * 有效就进主界面，401 就清掉登录态回到登录页。
+     * 当前登录用户。前端启动时调它验证本地存的 token 是否还有效：有效进主界面，401 就清掉登录态回登录页。
      */
     @GetMapping("/me")
     public UserVO me(CurrentUser currentUser) {

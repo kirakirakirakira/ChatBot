@@ -7,8 +7,7 @@ import java.time.LocalDateTime;
 
 /**
  * 返回给前端的用户信息。
- * <p>
- * 没有 password 字段：BCrypt 哈希也不能出网（拿到哈希就能离线慢慢爆破）。
+ * 没有 password 字段：BCrypt 哈希也不能出网，拿到哈希就能离线慢慢爆破。
  */
 public record UserVO(
         Long id,

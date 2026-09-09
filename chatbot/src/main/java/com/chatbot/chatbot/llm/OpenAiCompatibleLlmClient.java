@@ -19,18 +19,11 @@ import java.util.Map;
 
 /**
  * OpenAI 兼容接口客户端：百炼（DashScope）/ DeepSeek / OpenAI 均可直连。
- * 协议：POST {baseUrl}/chat/completions，stream=true，返回 SSE，
- * 每行形如 data: {"choices":[{"delta":{"content":"..."}}]}，最后以 data: [DONE] 结束。
+ * 协议：POST {baseUrl}/chat/completions，stream=true，返回 SSE，最后以 data: [DONE] 结束。
  * <p>
- * 推理模型在正式回答之前会先推一大段思考，用的是同一个 delta 里的另一个字段：
- * <pre>
- * {"choices":[{"delta":{"reasoning_content":"We need...","content":""}}]}  思考阶段，实测重复上千帧
- * {"choices":[{"delta":{"reasoning_content":"","content":"您"}}]}          回答阶段
- * </pre>
- * 两个字段都必须转发。只认 content 的话，思考期间一帧都发不出去：
- * 前端白屏等到思考结束（实测约 110 秒），打字机效果消失，
- * 而且浏览器 / Vite 代理 / Nginx 常见的 60 秒空闲超时会直接掐断连接，
- * 那时回答还没开始，一个字都存不下来。
+ * 推理模型在正式回答之前先推一大段思考，用的是同一个 delta 里的另一个字段 reasoning_content，
+ * 两个字段都必须转发：只认 content 的话思考期间一帧都发不出去，前端白屏等到思考结束，
+ * 还会被浏览器 / Vite 代理 / Nginx 常见的 60 秒空闲超时掐断——那时回答还没开始。
  */
 public class OpenAiCompatibleLlmClient implements LlmClient {
 
@@ -51,9 +44,8 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         body.put("model", props.model());
         body.put("stream", true);
         body.put("messages", messages);
-        // 思考开关：请求体里的 enableThinking 优先（每条消息可单独开关），
-        // 没传（null）则回落到 llm.enable-thinking 配置；两者都是 null 时不下发该参数，
-        // 免得直连不认识 enable_thinking 的服务商（OpenAI、DeepSeek 等）直接报 400。
+        // 思考开关：请求体里的 enableThinking 优先，没传则回落到 llm.enable-thinking；
+        // 两者都是 null 时不下发该参数，免得直连不认识 enable_thinking 的服务商报 400。
         Boolean thinking = (enableThinking != null) ? enableThinking : props.enableThinking();
         if (thinking != null) {
             body.put("enable_thinking", thinking);
@@ -62,8 +54,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(props.baseUrl() + "/chat/completions"))
                 // 整轮生成的总上限，不是空闲超时：JDK HttpClient 到点会直接关掉流式响应体，
-                // 表现为 IOException("closed")。原来写死 5 分钟，推理模型思考超过 5 分钟
-                // 就会在第 300 秒被掐断，思考了几万字、正式回答 0 字，全部作废还照样计费。
+                // 表现为 IOException("closed")，此前的思考全部作废还照样计费。
                 .timeout(Duration.ofSeconds(props.requestTimeoutSeconds()))
                 .header("Authorization", "Bearer " + props.apiKey())
                 .header("Content-Type", "application/json")
@@ -124,7 +115,7 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     record Choice(Delta delta) {
     }
 
-    /** 推理模型的思考增量在 reasoning_content，正式回答增量在 content。 */
+    /** 思考增量在 reasoning_content，回答增量在 content。 */
     record Delta(
             @JsonProperty("reasoning_content") String reasoningContent,
             String content) {

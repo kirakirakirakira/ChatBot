@@ -13,9 +13,7 @@ import tools.jackson.databind.ObjectMapper;
 @EnableConfigurationProperties(LlmProperties.class)
 public class LlmConfig {
 
-    /**
-     * 没配 api-key 就用 Mock，方便本地先把链路跑通。
-     */
+    /** 没配 api-key 就用 Mock，方便本地先把链路跑通。 */
     @Bean
     public LlmClient llmClient(LlmProperties props, ObjectMapper objectMapper) {
         if (props.apiKey() == null || props.apiKey().isBlank()) {

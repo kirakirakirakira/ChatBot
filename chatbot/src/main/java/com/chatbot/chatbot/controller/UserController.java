@@ -26,7 +26,7 @@ public class UserController {
     }
 
     /**
-     * 改自己的密码，返回新的登录态（token + 用户信息），前端直接换上即可，不用重新登录。
+     * 改自己的密码，返回新的登录态（token + 用户信息），前端直接换上、不用重新登录。
      * 路径里的 me 就是「只能是自己」：不接受 userId 参数。
      */
     @PutMapping("/me/password")
@@ -35,7 +35,7 @@ public class UserController {
         return userService.changePassword(currentUser, request);
     }
 
-    /** 用户列表，仅管理员（role=1）；普通用户拿到 403。 */
+    /** 用户列表，仅管理员；普通用户拿 403。 */
     @GetMapping
     @RequireAdmin
     public List<UserVO> list() {

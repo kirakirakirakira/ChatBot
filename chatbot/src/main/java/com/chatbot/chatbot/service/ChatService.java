@@ -30,7 +30,7 @@ public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
-    /** SSE 超时相对模型超时的余量：让「模型超时」的错误文案先冒出来，而不是连接被静默掐断。 */
+    /** SSE 超时相对模型超时的余量（原因见下方 sseTimeout()）。 */
     private static final long SSE_TIMEOUT_MARGIN_MS = 30_000L;
 
     /** ConversationService.create() 写入的默认标题；只有还等于它时才自动改名。 */
@@ -46,9 +46,8 @@ public class ChatService {
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     /**
-     * SSE 超时。原来写死 5 分钟，和 llm.request-timeout-seconds 各管各的：
-     * 推理模型思考超过 5 分钟时，两边会几乎同时到点，用户看到的是连接莫名断掉。
-     * 现在统一由模型超时推导，只有一个旋钮。
+     * SSE 超时由模型超时推导，只留一个旋钮：写死固定值时，长思考会让两边几乎同时到点，
+     * 用户看到的是连接莫名断掉。
      */
     private final long sseTimeoutMs;
 
@@ -69,16 +68,15 @@ public class ChatService {
 
     /**
      * 发消息并流式返回 AI 回复：
-     * 1. 会话还叫「新的对话」时，用首条用户消息前 30 字自动起标题
+     * 1. 会话还叫默认标题时，用首条用户消息前 30 字自动起标题
      * 2. 用户消息入库
      * 3. 取最近 N 条历史（llm.max-history-messages）作为上下文调用 LLM
-     * 4. 思考增量通过 SSE(reasoning) 推送，回答增量通过 SSE(delta) 推送
-     * 5. 结束后助手消息入库（只存回答，不存思考），推 done 事件
+     * 4. 思考增量走 SSE reasoning，回答增量走 SSE delta
+     * 5. 结束后助手消息入库（只存回答，不存思考），推 done
      * <p>
-     * 取消语义：前端 abort（点停止 / 关页面 / 切会话）、SSE 超时、客户端断网
-     * 都会置 cancelled，正在跑的生成会在下一个增量立刻停下 —— 思考增量也算，
-     * 否则推理模型思考的那几分钟里点停止是停不下来的。
-     * 已生成的回答照样入库，不会因为中断而丢掉。
+     * 取消：前端 abort（点停止 / 关页面 / 切会话）、SSE 超时、客户端断网都会置 cancelled，
+     * 正在跑的生成在下一个增量立刻停下（思考增量也算，否则思考那几分钟里点停止停不下来）；
+     * 已生成的回答照样入库，不会因为中断丢掉。
      */
     public SseEmitter chat(Long conversationId, ChatRequest request) {
         Conversation conversation = conversationService.require(conversationId);
@@ -108,8 +106,7 @@ public class ChatService {
         // 思考和回答各用一个代理字符暂存区，两条流的切分点互不影响。
         SurrogateBuffer contentBuffer = new SurrogateBuffer();
         SurrogateBuffer reasoningBuffer = new SurrogateBuffer();
-        // 思考只透传给前端、不入库：助手消息正文只该是正式回答。
-        // 计数是为了排查「思考几万字按输出计费、回答只有几个字」这类成本异常。
+        // 思考只透传给前端、不入库：助手消息正文只该是正式回答；计数用于排查思考远超回答的成本异常
         AtomicLong reasoningChars = new AtomicLong();
         try {
             llmClient.streamChat(history, enableThinking, new LlmStreamListener() {
@@ -150,9 +147,8 @@ public class ChatService {
         } catch (Exception e) {
             log.warn("对话生成失败 conversationId={}", conversation.getId(), e);
             savePartial(conversation, full, "生成失败");
-            // 错误已经用 SSE 事件告诉前端了，这里正常 complete 即可。
-            // 原来的 completeWithError(e) 会让 Spring 再把异常抛回已提交的
-            // text/event-stream 响应，日志里多一条没意义的 IllegalStateException。
+            // 错误已经用 SSE 事件告诉前端了，这里正常 complete 即可：
+            // completeWithError(e) 会让 Spring 把异常抛回已提交的 text/event-stream，日志多一条没意义的 IllegalStateException
             sendQuietly(emitter, ChatEvent.error(describe(e)));
             completeQuietly(emitter);
         }
@@ -160,8 +156,7 @@ public class ChatService {
 
     /**
      * 已取消就抛异常，让上层保留已生成内容。
-     * 思考和回答两条流都要检查：推理模型可能先思考几分钟才开始输出回答，
-     * 只在回答流里检查的话，思考阶段点「停止」要等到回答开始才生效。
+     * 思考和回答两条流都要检查：只在回答流里检查的话，思考阶段点「停止」要等到回答开始才生效。
      */
     private static void checkCancelled(AtomicBoolean cancelled) {
         if (cancelled.get()) {
@@ -232,7 +227,7 @@ public class ChatService {
 
     /**
      * 用首条用户消息给会话起标题，否则侧边栏永远是一排「新的对话」。
-     * 只改内存字段，紧接着 saveMessage() 里的 conversationRepository.save() 会一并落库。
+     * 只改内存字段，紧接着 saveMessage() 里的 save() 会一并落库。
      */
     private void applyAutoTitle(Conversation conversation, String userMessage) {
         String current = conversation.getTitle();
@@ -260,9 +255,8 @@ public class ChatService {
     }
 
     /**
-     * 落单高位代理字符的暂存区。emoji 等非 BMP 字符在 UTF-16 里占 2 个 char，
-     * 模型（或 Mock）若正好把它切成两段增量，单独一个 char 编不出 UTF-8，
-     * Jackson 会写成 '?'，前端就看到乱码。这里留到下一段凑成完整字符再发。
+     * 落单高位代理字符的暂存区：emoji 等非 BMP 字符在 UTF-16 里占 2 个 char，
+     * 正好被切成两段增量时，单个 char 编不出 UTF-8，Jackson 会写成 ?，前端看到乱码。
      * 只在单个生成任务内使用，不需要线程安全。
      */
     private static final class SurrogateBuffer {

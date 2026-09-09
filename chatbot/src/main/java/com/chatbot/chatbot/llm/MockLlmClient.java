@@ -4,11 +4,8 @@ import java.util.List;
 import java.util.function.Consumer;
 
 /**
- * 本地 Mock 实现：不需要任何 API key，用于先跑通整条流式链路。
- * 配置了 llm.api-key 后，系统自动切换为真实的 OpenAI 兼容客户端。
- * <p>
- * 思考开关（请求体 enableThinking，未传时用 llm.enable-thinking 配置）为 true 时会先推一小段假思考，
- * 这样没有 API Key 也能验证 reasoning 事件这条链路，顺便看前端「思考中…」的样子。
+ * 本地 Mock：不需要 API key，用来先跑通整条流式链路；配了 llm.api-key 就自动切换为真实的 OpenAI 兼容客户端。
+ * 思考开关为 true 时先推一小段假思考，没有 key 也能验证 reasoning 这条链路。
  */
 public class MockLlmClient implements LlmClient {
 
@@ -30,7 +27,7 @@ public class MockLlmClient implements LlmClient {
             }
         }
 
-        // 请求体里的 enableThinking 优先（每条消息可单独开关），没传则回落到 llm.enable-thinking 配置
+        // 请求体里的 enableThinking 优先（每条消息可单独开关），没传则回落到 llm.enable-thinking
         Boolean thinking = (enableThinking != null) ? enableThinking : props.enableThinking();
         if (Boolean.TRUE.equals(thinking)) {
             emit(listener::onReasoning,
@@ -44,8 +41,8 @@ public class MockLlmClient implements LlmClient {
     }
 
     /**
-     * 按码点切，不能按 char 切：emoji 这类非 BMP 字符在 UTF-16 里占 2 个 char，
-     * 按 char 切会把代理对拆成两个落单 char，Jackson 编不出 UTF-8，SSE 里就变成两个 '?'。
+     * 按码点切而不是按 char 切：非 BMP 字符在 UTF-16 里占 2 个 char，
+     * 拆成落单 char 后 Jackson 编不出 UTF-8，SSE 里就变成两个 ?。
      */
     private static void emit(Consumer<String> sink, String text) {
         int index = 0;

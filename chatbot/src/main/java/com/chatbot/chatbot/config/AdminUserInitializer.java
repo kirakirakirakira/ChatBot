@@ -13,14 +13,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
- * 首次启动兜底：sys_user 表一个用户都没有时，创建初始管理员（默认 admin / admin）。
- * <p>
- * sql/init.sql 里已经有一条等价的 INSERT IGNORE，两者留一个就够。之所以还要这段代码：
- * 项目跑的是 spring.jpa.hibernate.ddl-auto=update，很多人不执行 init.sql 直接启动，
- * 那样表会被 Hibernate 建出来、但里面没有 admin，结果谁都登录不进去。
- * <p>
- * 判断条件是 count() == 0，所以它只在「全新库」上生效：
- * 既不会覆盖已有用户，也不会把谁改过的密码重置回 admin。
+ * 首次启动兜底：sys_user 表为空时创建初始管理员（默认 admin / admin）。
+ * 很多人不执行 sql/init.sql、直接靠 ddl-auto=update 启动，那样表建出来但没有账号，谁都登录不进去。
+ * 条件只有 count()==0，因此仅对全新库生效，不会覆盖已有账号或重置改过的密码。
  */
 @Component
 public class AdminUserInitializer implements ApplicationRunner {
@@ -50,7 +45,7 @@ public class AdminUserInitializer implements ApplicationRunner {
         admin.setPassword(passwordEncoder.encode(authProperties.defaultAdminPassword()));
         admin.setRole(Roles.ADMIN);
         userRepository.save(admin);
-        // 故意不把密码打进日志：日志会被收集、会被转发，密码不该出现在里面
+        // 故意不把密码打进日志：日志会被收集和转发，密码不该出现在里面
         log.warn("sys_user 表为空，已创建初始管理员账号「{}」（密码取自 auth.default-admin-password，默认 admin），"
                 + "请登录后立即修改", admin.getUsername());
     }

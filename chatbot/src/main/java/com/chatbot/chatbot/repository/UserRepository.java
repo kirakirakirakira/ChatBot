@@ -11,6 +11,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
     /** 登录用：按用户名精确查（username 上有唯一索引）。 */
     Optional<User> findByUsername(String username);
 
-    /** 管理员看的用户列表，按 id 升序：初始 admin 永远排第一。 */
+    /** 管理员看的用户列表，按 id 升序：初始 admin 排第一。 */
     List<User> findAllByOrderByIdAsc();
 }
