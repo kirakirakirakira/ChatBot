@@ -8,12 +8,16 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
 
 ## 接口
 
-全量接口表见 PROJECT_OVERVIEW.md 第七节，此处不重复。两条前提：
+全量接口表见 PROJECT_OVERVIEW.md 第七节，此处不重复。三条前提：
 
 - `/api/**` 除 `POST /api/auth/login` 外全部要求 `Authorization: Bearer <token>`（见 `WebConfig.PUBLIC_PATHS`）。
   白名单模式：新加的接口默认受保护，不用改配置。
 - token 是自签 HMAC-SHA256，无状态。`auth.token-secret` **少于 32 字符后端直接启动失败**；
   改密码后旧 token 立即失效（payload 的 `iat` 用毫秒，与 `password_changed_at` 比对）。
+- **会话不按用户隔离**：`conversation` 表没有 `user_id`，`ConversationController` / `ChatController` 也不接 `CurrentUser`，
+  因此所有登录用户共享同一份会话列表，并能读取、写入、删除彼此的会话。`GET /api/conversations/{id}/messages`
+  和 `DELETE /api/conversations/{id}` 都不校验归属。这里的「多用户」只体现在鉴权与用户管理上，不是数据隔离。
+  要做隔离需要：加列 + 改 3 个查询 + 两个控制器接 `CurrentUser` + service 层校验归属（见 PROJECT_OVERVIEW.md 13.1 第 1 条）。
 
 会话标题：发出第一条消息时，自动用该消息前 30 字替换「新的对话」，前端侧边栏可以直接显示。
 
@@ -53,7 +57,10 @@ SSE 超时 = `llm.request-timeout-seconds` + 30 秒，走同一条逻辑。
 
     {"timestamp":"...","status":404,"error":"Not Found","message":"会话不存在: 3","path":"/api/conversations/3/messages"}
 
-由 `GlobalExceptionHandler` + `server.error.include-message=always` 保证。
+由 `GlobalExceptionHandler` 自己组装 `ErrorResponse` 保证，**不依赖 `server.error.include-message`**——
+`application.properties` 里没有这一项：它只影响 Spring 默认 `/error` 的输出，而本项目所有错误都走 `@RestControllerAdvice`，
+message 是处理器自己填进去的。另外每个 handler 都显式设了 `Content-Type: application/json`，
+否则内容协商会因为 `Accept: text/event-stream` 变成 406，把真实状态码盖掉。
 chat 接口出错时返回的是上面的 SSE `error` 事件，不是这个结构。
 
 ## 手动测试
@@ -88,7 +95,6 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 | llm.request-timeout-seconds | 900 | 整轮生成的上限，**不是空闲超时**。SSE 超时自动取它 +30 秒 |
 | llm.max-history-messages | 20 | 每轮只把最近 N 条历史送给模型，<=0 表示不限制 |
 | spring.jpa.show-sql | false | 要调试 SQL 用 `SHOW_SQL=true` 启动 |
-| server.error.include-message | always | 改成 never 的话前端只能拿到 status，看不到「会话不存在: 3」这种文案 |
 
 环境变量与配置项的对照表见 PROJECT_OVERVIEW.md 5.1。
 

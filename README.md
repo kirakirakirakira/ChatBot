@@ -4,8 +4,13 @@ A full-stack AI chat app: Spring Boot backend + Vue 3 frontend, with multi-user 
 multi-conversation management, and streaming (SSE) replies from Alibaba Cloud Bailian
 DashScope or any other OpenAI-compatible model.
 
-> 中文全量说明（架构 / 模块 / 数据库 / API / 安全设计 / 扩展点）见 [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)。
+> 中文全量说明（架构 / 逐文件清单 / 数据库 / API 全量表 / 核心流程 / 安全设计 / 扩展点 / 已知限制）见 [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)。
 > This README only covers how to get it running.
+
+> **Scope note / 范围说明**: "multi-user" here means **authentication and user management only**.
+> Conversations are **not** scoped per user (`conversation` has no `user_id`), so every logged-in user
+> sees — and can edit or delete — the same shared conversation list.
+> 「多用户」目前只指登录与用户管理；会话是全站共享的，不做用户隔离。见 PROJECT_OVERVIEW.md 第十三节。
 
 ## Tech Stack
 
@@ -62,9 +67,15 @@ npm run dev                     # http://localhost:5173, Vite proxies /api to :8
 
 | Read this | For |
 | --------- | --- |
-| [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | 中文全量架构说明：模块清单、目录树、数据库设计、API 全量表、核心流程、安全设计、扩展点、已知限制 |
+| [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | **架构事实源（改代码前先读它）**：五分钟速览与检索速查、目录树 + 逐文件清单、后端分层与调用链、前端组件与状态、配置与环境变量全表、列级数据库设计、API 全量表与 JSON 形状、五条核心流程、安全设计、开发命令、**改完代码后的文档同步清单**、扩展点、已知限制与 18 条踩坑记录 |
 | [chatbot/README.md](chatbot/README.md) | Backend contract: SSE event shapes, why reasoning is forwarded, cancel semantics, error body, config trade-offs |
 | [chatbot-web/README.md](chatbot-web/README.md) | Frontend conventions: Vite proxy, Node version, auth gate, SSE parsing over fetch, component map |
 
 Startup commands live in this file only; contract details live in the module READMEs only.
 Everything else points at them instead of repeating.
+
+### For AI agents / 给大模型与 AI 编码助手
+
+仓库根目录的 `AGENTS.md` 是协作规则（**检索代码前先读 `PROJECT_OVERVIEW.md`；每次改完代码同步更新文档**）。
+注意它被 `.gitignore` 忽略、只在本地工作区存在；如果你在一份新克隆的仓库里看不到它，
+请直接以 `PROJECT_OVERVIEW.md` 为准——它入库，且第十一节就是「代码修改后的文档同步清单」。

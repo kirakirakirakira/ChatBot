@@ -38,6 +38,10 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 任何接口返回 **401 都当作「会话已失效」**：`api.ts` 调 `clearSession()`，`App.vue` 随之弹回登录页。
 因此不存在绕过登录能访问的页面，也不需要路由守卫。
 
+> 但**登录 ≠ 数据隔离**：侧边栏里的会话是全站共享的（后端 `conversation` 表没有 `user_id`），
+> 换账号登录看到的还是同一份列表。前端不需要为此做任何处理，也不要误以为侧边栏是「我的会话」。
+> 详见 `chatbot/README.md`「接口」一节与 `PROJECT_OVERVIEW.md` 13.1。
+
 改密码成功后后端会换发新 token（响应体就是一份新的 `LoginResponse`），前端用它覆盖本地 token，当前会话不中断。
 
 ## SSE 流式解析
@@ -58,7 +62,9 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 - **停止生成 = abort 这个 fetch**，不需要调额外接口；后端会停止调用模型并把已生成的部分入库，刷新页面能看到
 - 空闲超过 60 秒连接会被中间层掐断，正常情况下后端转发思考帧会一直有字节流动
 
-`MessageBubble.vue` 负责 Markdown 渲染、思考过程折叠和流式打字效果。
+`MessageBubble.vue` 负责正文渲染、思考过程折叠和流式打字光标。
+**正文是纯文本**（`{{ message.content }}` + `white-space: pre-wrap`），项目没有引入任何 Markdown 渲染库，
+代码块 / 列表 / 表格都按原样显示；要加 Markdown 得先引依赖，并同步更新 `PROJECT_OVERVIEW.md` 4.1 与 13.1。
 
 ## 目录结构
 
@@ -73,7 +79,7 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
         ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 + 停止生成
       components/
         ConversationSidebar.vue   会话列表，按 updated_at 倒序，支持新建 / 删除
-        MessageBubble.vue         消息气泡，区分 user / assistant
+        MessageBubble.vue         消息气泡，区分 user / assistant；纯文本渲染（无 Markdown）+ 思考折叠 + 打字光标
         ChangePasswordDialog.vue  修改密码，所有人可见
         UserListDialog.vue        用户管理，仅 isAdmin 时可见
       assets/main.css
