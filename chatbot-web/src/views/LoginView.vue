@@ -40,7 +40,12 @@ async function submit(): Promise<void> {
 <template>
   <div class="login-page">
     <form class="login-card" @submit.prevent="submit">
-      <h1 class="login-title">Chatbot</h1>
+      <div class="login-brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
+        </span>
+        <h1 class="login-title">Chatbot</h1>
+      </div>
       <p class="login-subtitle">登录后开始对话</p>
 
       <div v-if="error" class="alert-error login-error">{{ error }}</div>
@@ -82,52 +87,86 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
+/* 背景用两团很淡的品牌色光晕：纯灰底太「后台管理系统」，光晕让登录页有一点产品感 */
 .login-page {
   height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: var(--bg);
+  background:
+    radial-gradient(600px 320px at 15% 8%, color-mix(in srgb, var(--accent) 10%, transparent), transparent 70%),
+    radial-gradient(520px 300px at 88% 92%, color-mix(in srgb, #2b6cb0 9%, transparent), transparent 70%),
+    var(--bg);
 }
 
 .login-card {
   width: 100%;
-  max-width: 360px;
+  max-width: 372px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 28px 24px 20px;
+  padding: 32px 28px 22px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 16px;
-  box-shadow: 0 12px 40px rgb(0 0 0 / 8%);
+  border-radius: 20px;
+  box-shadow: var(--shadow-2);
+  animation: card-in 220ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 50%, #2b6cb0));
+  color: #fff;
+  box-shadow: var(--shadow-1);
 }
 
 .login-title {
   margin: 0;
-  font-size: 24px;
-  text-align: center;
-  color: var(--accent);
+  font-size: 23px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
 }
 
 .login-subtitle {
-  margin: -6px 0 4px;
+  margin: -6px 0 6px;
   font-size: 13px;
   text-align: center;
   color: var(--text-muted);
 }
 
 .login-submit {
-  margin-top: 4px;
+  margin-top: 6px;
   width: 100%;
   padding: 11px;
+  border-radius: var(--radius-m);
+  font-size: 15px;
 }
 
 .login-hint {
-  margin: 0;
+  margin: 2px 0 0;
   font-size: 12px;
   text-align: center;
   color: var(--text-muted);
+  opacity: 0.85;
 }
 </style>

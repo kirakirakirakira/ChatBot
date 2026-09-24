@@ -71,13 +71,24 @@ function formatTime(iso: string): string {
 
 <template>
   <aside class="sidebar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
+      </span>
+      <span class="brand-name">Chatbot</span>
+    </div>
+
     <button
       class="new-chat"
       type="button"
       :disabled="!canCreate"
       :title="canCreate ? '新建对话' : '当前对话还没有消息，直接发消息即可'"
       @click="emit('create')"
-    >＋ 新建对话</button>
+    >
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
+      新建对话
+    </button>
+
     <ul class="conv-list">
       <li
         v-for="c in conversations"
@@ -86,8 +97,6 @@ function formatTime(iso: string): string {
         :class="{ active: c.id === activeId }"
         @click="emit('select', c.id)"
       >
-        <!-- 双击标题行内改名：Enter / 失焦提交，Esc 取消。
-             输入框上 @click.stop，否则点输入框会把整个 li 的 select 也触发掉 -->
         <input
           v-if="editingId === c.id"
           :ref="setRenameInput"
@@ -99,14 +108,34 @@ function formatTime(iso: string): string {
           @keydown.esc="cancelRename()"
           @blur="commitRename(c.id)"
         />
-        <span v-else class="conv-title" :title="c.title + '（双击重命名）'" @dblclick.stop="startRename(c.id, c.title)">{{ c.title }}</span>
-        <span class="conv-time">{{ formatTime(c.updatedAt) }}</span>
-        <button
-          class="conv-delete"
-          type="button"
-          title="删除对话"
-          @click.stop="emit('remove', c.id)"
-        >×</button>
+        <span
+          v-else
+          class="conv-title"
+          :title="c.title + '（双击重命名）'"
+          @dblclick.stop="startRename(c.id, c.title)"
+        >{{ c.title }}</span>
+
+        <span class="conv-side">
+          <span class="conv-time">{{ formatTime(c.updatedAt) }}</span>
+          <span class="conv-actions">
+            <button
+              class="icon-btn"
+              type="button"
+              title="重命名"
+              @click.stop="startRename(c.id, c.title)"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" /></svg>
+            </button>
+            <button
+              class="icon-btn danger"
+              type="button"
+              title="删除对话"
+              @click.stop="emit('remove', c.id)"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+            </button>
+          </span>
+        </span>
       </li>
     </ul>
   </aside>
@@ -114,44 +143,79 @@ function formatTime(iso: string): string {
 
 <style scoped>
 .sidebar {
-  width: 260px;
+  width: 264px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 12px;
-  background: var(--panel);
+  gap: 10px;
+  padding: 14px 12px;
+  background: var(--panel-2);
   border-right: 1px solid var(--border);
 }
 
-.new-chat {
-  width: 100%;
-  padding: 10px;
-  border: none;
-  border-radius: 10px;
-  background: var(--accent);
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 2px 6px 6px;
+}
+
+.brand-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 50%, #2b6cb0));
   color: #fff;
+  box-shadow: var(--shadow-1);
+}
+
+.brand-name {
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: 0.2px;
+}
+
+.new-chat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
 }
 
 .new-chat:not(:disabled):hover {
-  filter: brightness(1.08);
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  border-style: solid;
+  color: var(--accent-strong);
 }
 
 .new-chat:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
 .conv-list {
   flex: 1;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   list-style: none;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
 .conv-item {
@@ -159,17 +223,23 @@ function formatTime(iso: string): string {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 30px 10px 10px;
-  border-radius: 8px;
+  padding: 9px 10px;
+  border-radius: var(--radius-m);
   cursor: pointer;
+  transition: background 120ms ease;
 }
 
 .conv-item:hover {
-  background: var(--bg);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
 }
 
 .conv-item.active {
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  background: var(--accent-soft);
+}
+
+.conv-item.active .conv-title {
+  color: var(--accent-strong);
+  font-weight: 600;
 }
 
 .conv-title {
@@ -178,49 +248,77 @@ function formatTime(iso: string): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14px;
+  font-size: 13.5px;
+}
+
+.conv-side {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.conv-time {
+  font-size: 11px;
+  color: var(--text-muted);
+  transition: opacity 100ms ease;
+}
+
+/* 操作按钮悬停时才出现，并盖住时间：一行宽度有限，两者同时显示会挤 */
+.conv-actions {
+  position: absolute;
+  right: -4px;
+  display: flex;
+  gap: 2px;
+  padding-left: 10px;
+  background: linear-gradient(to right, transparent, var(--panel-2) 30%);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+
+.conv-item:hover .conv-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.conv-item:hover .conv-time {
+  opacity: 0;
+}
+
+.icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.icon-btn:hover {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+
+.icon-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  color: var(--danger);
 }
 
 .conv-rename {
   flex: 1;
   min-width: 0;
-  padding: 2px 6px;
+  padding: 3px 7px;
   border: 1px solid var(--accent);
-  border-radius: 4px;
-  background: var(--bg);
+  border-radius: 6px;
+  background: var(--panel);
   color: var(--text);
-  font-size: 14px;
+  font-size: 13.5px;
   outline: none;
-}
-
-.conv-time {
-  flex-shrink: 0;
-  font-size: 12px;
-  color: var(--text-muted);
-}
-
-.conv-delete {
-  position: absolute;
-  right: 6px;
-  top: 50%;
-  transform: translateY(-50%);
-  padding: 2px 6px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  visibility: hidden;
-}
-
-.conv-item:hover .conv-delete {
-  visibility: visible;
-}
-
-.conv-delete:hover {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
 }
 </style>

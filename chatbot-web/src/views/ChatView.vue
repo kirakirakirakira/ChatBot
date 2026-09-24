@@ -5,6 +5,7 @@ import MessageBubble from '@/components/MessageBubble.vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 import SystemPromptDialog from '@/components/SystemPromptDialog.vue'
 import UserListDialog from '@/components/UserListDialog.vue'
+import UserMenu from '@/components/UserMenu.vue'
 import type { CurrentUser, LoginResult, UiMessage } from '@/types'
 import type { StreamHandlers, StreamOptions } from '@/api'
 import { clearSession, currentUser, isAdmin, setSession, token } from '@/auth'
@@ -52,6 +53,38 @@ const THINKING_BUDGET_CHOICES: { value: string; label: string }[] = [
 
 watch(selectedModel, (v) => localStorage.setItem('chatbot.model', v))
 watch(thinkingBudgetSel, (v) => localStorage.setItem('chatbot.thinkingBudget', v))
+/** 顶栏标题 = 当前会话标题；没选中时给个占位，避免顶栏空一块。 */
+const activeTitle = computed(() => {
+  const c = conversations.value.find((x) => x.id === activeId.value)
+  return c ? c.title : '新的对话'
+})
+
+/** 空状态的开场建议：点一下填进输入框，比让用户面对空白输入框发呆友好。 */
+const SUGGESTIONS = [
+  '解释一下 SSE 和 WebSocket 的区别',
+  '帮我写一个 MySQL 分页查询',
+  '用三句话讲清楚什么是向量数据库',
+]
+
+const composer = ref<HTMLTextAreaElement | null>(null)
+
+function useSuggestion(text: string): void {
+  input.value = text
+  void nextTick(() => composer.value?.focus())
+}
+
+/** 输入框自动长高：固定 rows=1 会让长消息变成滚动条地狱；上限 200px 之后交还滚动。 */
+function autoGrow(): void {
+  const el = composer.value
+  if (!el) {
+    return
+  }
+  el.style.height = 'auto'
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px'
+}
+
+watch(input, () => void nextTick(autoGrow))
+
 /** 会话列表加载失败、删除失败这类全局错误，横幅展示。 */
 const fatalError = ref('')
 const showPasswordDialog = ref(false)
@@ -498,78 +531,120 @@ onBeforeUnmount(stopStreaming)
 
     <main class="chat">
       <header class="topbar">
-        <span class="topbar-title">Chatbot</span>
-        <div class="topbar-right">
-          <button v-if="isAdmin" class="link-btn" type="button" @click="showUserDialog = true">用户管理</button>
-          <button class="link-btn" type="button" @click="showPromptDialog = true">系统提示词</button>
-          <button class="link-btn" type="button" @click="showPasswordDialog = true">修改密码</button>
-          <span class="user-chip">
-            <span class="user-name">{{ currentUser?.username }}</span>
-            <span class="user-role" :class="{ admin: isAdmin }">{{ currentUser?.roleLabel }}</span>
-          </span>
-          <button class="link-btn danger" type="button" @click="logout">退出登录</button>
-        </div>
+        <span class="topbar-title" :title="activeTitle">{{ activeTitle }}</span>
+        <UserMenu
+          v-if="currentUser"
+          :user="currentUser"
+          :is-admin="isAdmin"
+          @users="showUserDialog = true"
+          @prompt="showPromptDialog = true"
+          @password="showPasswordDialog = true"
+          @logout="logout"
+        />
       </header>
 
       <div v-if="fatalError" class="fatal-error">{{ fatalError }}</div>
 
       <div ref="scroller" class="messages">
-        <div v-if="loadingMessages" class="hint">消息加载中…</div>
-        <div v-else-if="messages.length === 0" class="hint">发送第一条消息，开始对话</div>
-        <template v-else>
-          <div v-if="hasMoreOlder" class="older">
-            <button
-              class="link-btn"
-              type="button"
-              :disabled="loadingOlder || streaming"
-              :title="loadingOlder ? '正在加载' : '再往前翻 50 条'"
-              @click="loadOlder"
-            >
-              {{ loadingOlder ? '加载更早的消息…' : '加载更早的消息' }}
-            </button>
+        <div class="thread">
+          <div v-if="loadingMessages" class="hint">消息加载中…</div>
+
+          <div v-else-if="messages.length === 0" class="empty">
+            <div class="empty-mark" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
+            </div>
+            <h2 class="empty-title">今天想聊点什么？</h2>
+            <p class="empty-sub">选一个开场，或直接输入你的问题</p>
+            <div class="chips">
+              <button v-for="s in SUGGESTIONS" :key="s" class="chip" type="button" @click="useSuggestion(s)">
+                {{ s }}
+              </button>
+            </div>
           </div>
-          <MessageBubble
-            v-for="(m, i) in messages"
-            :key="m.id ?? 'pending-' + i"
-            :message="m"
-            :can-regenerate="m.role === 'assistant' && i === messages.length - 1 && !streaming"
-            @regenerate="regenerate"
-          />
-        </template>
+
+          <template v-else>
+            <div v-if="hasMoreOlder" class="older">
+              <button
+                class="older-btn"
+                type="button"
+                :disabled="loadingOlder || streaming"
+                :title="loadingOlder ? '正在加载' : '再往前翻 50 条'"
+                @click="loadOlder"
+              >
+                {{ loadingOlder ? '加载更早的消息…' : '加载更早的消息' }}
+              </button>
+            </div>
+            <MessageBubble
+              v-for="(m, i) in messages"
+              :key="m.id ?? 'pending-' + i"
+              :message="m"
+              :can-regenerate="m.role === 'assistant' && i === messages.length - 1 && !streaming"
+              @regenerate="regenerate"
+            />
+          </template>
+        </div>
       </div>
 
-      <footer class="input-bar">
-        <label class="thinking-toggle" title="只对本条消息生效：开启后推理模型先思考再回答，首字更慢">
-          <input v-model="thinkingOn" type="checkbox" :disabled="streaming" />
-          思考模式
-        </label>
-        <select
-          v-model="selectedModel"
-          class="bar-select"
-          :disabled="streaming || llmModels.length === 0"
-          title="本轮使用的模型"
-        >
-          <option v-for="m in llmModels" :key="m" :value="m">{{ m }}</option>
-        </select>
-        <select
-          v-model="thinkingBudgetSel"
-          class="bar-select"
-          :disabled="streaming || !thinkingOn"
-          title="思考预算：思维链 token 上限。思考模式关闭时不可选"
-        >
-          <option v-for="c in THINKING_BUDGET_CHOICES" :key="c.value" :value="c.value">{{ c.label }}</option>
-        </select>
-        <div class="input-row">
+      <footer class="composer-wrap">
+        <div class="composer">
           <textarea
+            ref="composer"
             v-model="input"
-            class="input"
+            class="composer-input"
             rows="1"
             placeholder="输入消息，Enter 发送，Shift+Enter 换行"
             @keydown="onKeydown"
           ></textarea>
-          <button v-if="streaming" class="btn stop" type="button" @click="stopStreaming">停止</button>
-          <button v-else class="btn send" type="button" :disabled="!input.trim()" @click="send">发送</button>
+          <div class="composer-bar">
+            <div class="composer-left">
+              <label
+                class="pill-toggle"
+                :class="{ on: thinkingOn }"
+                title="只对本条消息生效：开启后推理模型先思考再回答，首字更慢"
+              >
+                <input v-model="thinkingOn" type="checkbox" :disabled="streaming" />
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
+                思考
+              </label>
+              <select
+                v-model="selectedModel"
+                class="pill-select"
+                :disabled="streaming || llmModels.length === 0"
+                title="本轮使用的模型"
+              >
+                <option v-for="m in llmModels" :key="m" :value="m">{{ m }}</option>
+              </select>
+              <select
+                v-model="thinkingBudgetSel"
+                class="pill-select"
+                :disabled="streaming || !thinkingOn"
+                title="思考预算：思维链 token 上限。思考模式关闭时不可选"
+              >
+                <option v-for="c in THINKING_BUDGET_CHOICES" :key="c.value" :value="c.value">{{ c.label }}</option>
+              </select>
+            </div>
+            <button
+              v-if="streaming"
+              class="round-btn stop"
+              type="button"
+              title="停止生成"
+              @click="stopStreaming"
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>
+            </button>
+            <button
+              v-else
+              class="round-btn send"
+              type="button"
+              :disabled="!input.trim()"
+              title="发送"
+              @click="send"
+            >
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
+            </button>
+          </div>
         </div>
+        <p class="composer-note">模型回答仅供参考，重要信息请自行核实</p>
       </footer>
     </main>
 
@@ -601,183 +676,302 @@ onBeforeUnmount(stopStreaming)
   flex-direction: column;
 }
 
+/* 顶栏刻意做得几乎隐形：只有会话标题和头像菜单，聊天区才是主角 */
 .topbar {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 12px;
-  padding: 8px 16px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--border);
+  padding: 10px 20px;
 }
 
 .topbar-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 14px;
   font-weight: 600;
   color: var(--text-muted);
 }
 
-.topbar-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.link-btn {
-  padding: 4px 8px;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.link-btn:hover {
-  color: var(--text);
-  background: var(--bg);
-}
-
-.link-btn.danger:hover {
-  color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-}
-
-.user-chip {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  font-size: 13px;
-}
-
-.user-name {
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.user-role {
-  padding: 0 6px;
-  border-radius: 999px;
-  font-size: 11px;
-  background: var(--bg);
-  color: var(--text-muted);
-}
-
-.user-role.admin {
-  color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 14%, transparent);
-}
-
 .fatal-error {
-  padding: 8px 16px;
-  font-size: 14px;
+  margin: 0 20px 8px;
+  padding: 8px 14px;
+  border-radius: var(--radius-m);
+  font-size: 13.5px;
   color: var(--danger);
-  background: color-mix(in srgb, var(--danger) 10%, transparent);
-  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 22%, transparent);
 }
 
 .messages {
   flex: 1;
   overflow-y: auto;
-  padding: 24px;
+  padding: 8px 24px 24px;
+}
+
+/* 内容列居中限宽：超宽屏上整行铺满的文字读起来非常累 */
+.thread {
+  max-width: 760px;
+  margin: 0 auto;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 22px;
 }
 
 .older {
   align-self: center;
 }
 
-/* .messages 是 flex column，不写 align-self 按钮会被拉成一整行宽 */
-.older .link-btn:disabled {
+.older-btn {
+  padding: 5px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+
+.older-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.older-btn:disabled {
   opacity: 0.6;
   cursor: default;
 }
 
 .hint {
   margin: auto;
+  padding: 40px 0;
   color: var(--text-muted);
   text-align: center;
 }
 
-.input-bar {
-  padding: 10px 24px 16px;
-  background: var(--panel);
-  border-top: 1px solid var(--border);
+/* ---------- 空状态 ---------- */
+.empty {
+  margin: auto;
+  padding: 48px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
 }
 
-.bar-select {
-  padding: 4px 6px;
+.empty-mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  margin-bottom: 8px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, var(--accent), color-mix(in srgb, var(--accent) 45%, #2b6cb0));
+  color: #fff;
+  box-shadow: var(--shadow-1);
+}
+
+.empty-title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 650;
+  letter-spacing: 0.3px;
+}
+
+.empty-sub {
+  margin: 0 0 14px;
+  font-size: 13.5px;
+  color: var(--text-muted);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 560px;
+}
+
+.chip {
+  padding: 7px 14px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-pill);
   background: var(--panel);
   color: var(--text);
-  font-size: 12px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease, transform 80ms ease;
 }
 
-.bar-select:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
+.chip:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
 }
 
-.thinking-toggle {
+.chip:active {
+  transform: scale(0.97);
+}
+
+/* ---------- 合成输入框 ---------- */
+.composer-wrap {
+  padding: 0 24px 14px;
+}
+
+.composer {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 10px 12px 8px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: var(--shadow-1);
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), var(--shadow-1);
+}
+
+.composer-input {
+  display: block;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  resize: none;
+  line-height: 1.55;
+  max-height: 200px;
+}
+
+.composer-input:focus {
+  outline: none;
+}
+
+.composer-input::placeholder {
+  color: var(--text-muted);
+}
+
+.composer-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.composer-left {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-bottom: 8px;
-  font-size: 13px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+/* 思考开关做成 pill：比裸 checkbox 更像「一个模式」而不是「一个表单项」 */
+.pill-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
   color: var(--text-muted);
+  font-size: 12.5px;
   cursor: pointer;
   user-select: none;
-  width: fit-content;
+  transition: all 120ms ease;
 }
 
-.input-row {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
+.pill-toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.input {
-  flex: 1;
-  resize: none;
-  padding: 10px 12px;
-  max-height: 160px;
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  background: var(--bg);
-  line-height: 1.5;
+.pill-toggle.on {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
 }
 
-.input:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-.btn {
-  padding: 10px 18px;
-  border: none;
-  border-radius: 10px;
+.pill-select {
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
   cursor: pointer;
-  color: #fff;
+  max-width: 170px;
+  transition: all 120ms ease;
 }
 
-.btn.send {
-  background: var(--accent);
+.pill-select:hover:not(:disabled) {
+  border-color: var(--border);
+  background: var(--panel-2);
+  color: var(--text);
 }
 
-.btn.send:disabled {
-  opacity: 0.5;
+.pill-select:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 
-.btn.stop {
-  background: var(--danger);
+.round-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background 120ms ease, transform 80ms ease, opacity 120ms ease;
+}
+
+.round-btn.send {
+  background: var(--accent);
+  color: #fff;
+}
+
+.round-btn.send:hover:not(:disabled) {
+  background: var(--accent-strong);
+}
+
+.round-btn.send:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.round-btn.send:disabled {
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.round-btn.stop {
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--text);
+}
+
+.round-btn.stop:hover {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.composer-note {
+  max-width: 760px;
+  margin: 8px auto 0;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  opacity: 0.75;
 }
 </style>
