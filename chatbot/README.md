@@ -109,7 +109,8 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 | llm.available-models | qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max | 界面可选模型白名单（逗号分隔，`LLM_AVAILABLE_MODELS` 可覆盖）。请求里的 `model` 不在里面就 400，错误文案里带上清单 |
 | llm.enable-thinking | true | 映射为请求体顶层的 `enable_thinking`，取舍见下 |
 | llm.request-timeout-seconds | 900 | 整轮生成的上限，**不是空闲超时**。SSE 超时自动取它 +30 秒 |
-| llm.max-history-messages | 20 | 每轮只把最近 N 条历史送给模型，<=0 表示不限制 |
+| llm.max-history-messages | 20 | 历史的**条数**上限，<=0 不限制；与 token 预算谁先满足谁生效 |
+| llm.max-history-tokens | 24000 | 历史的 **token 预算**（估算：中文 1 字 1 token、其余 4 字符 1 token，思考也计入），超了从最老的开始截；<=0 不限 |
 | spring.jpa.show-sql | false | 要调试 SQL 用 `SHOW_SQL=true` 启动 |
 
 环境变量与配置项的对照表见 PROJECT_OVERVIEW.md 5.1。

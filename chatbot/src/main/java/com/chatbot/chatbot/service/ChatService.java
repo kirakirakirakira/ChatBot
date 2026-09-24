@@ -52,6 +52,9 @@ public class ChatService {
      */
     private static final int MAX_THINKING_BUDGET = 262144;
 
+    /** 拼历史时一次最多往前扫的条数：token 预算之外的第二道保险，防整段历史进内存。 */
+    private static final int HISTORY_SCAN_LIMIT = 200;
+
     private final ConversationService conversationService;
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
@@ -335,30 +338,65 @@ public class ChatService {
      * {@code limit <= 0} 仍然全量查——配置里写明了「<=0 表示不限制」，不能悄悄换成默认值。
      */
     /**
-     * 取最近 N 条历史拼成模型输入；用户设了系统提示词时，把它作为 system 消息放在最前面。
-     * system 消息**不占** max-history-messages 的名额：它是人设不是对话，截历史不该把它截掉。
+     * 取历史拼成模型输入：从最近一条往前累加估算 token，**条数上限和 token 预算谁先满足谁生效**；
+     * 用户设了系统提示词时把它作为 system 消息放在最前面（system 不占历史名额：它是人设不是对话）。
+     * <p>
+     * 一次最多往前扫 {@link #HISTORY_SCAN_LIMIT} 条：再老的上下文对回答的帮助已经很小，
+     * 不值得为它把整段历史拉进内存——这正是 token 预算要防的事。
+     * <p>
+     * 保证至少带上最新一条（通常就是用户刚问的那句），否则模型连问题都看不到。
      */
     private List<LlmMessage> recentHistory(Long conversationId, String systemPrompt) {
-        int limit = llmProperties.maxHistoryMessages();
-        List<Message> window;
-        if (limit > 0) {
-            // 按 id 倒序取 limit 条就是最近的 limit 条，再反转成时间正序（模型要求历史从旧到新）
-            window = new ArrayList<>(messageRepository.findByConversationId(
-                    conversationId, PageRequest.of(0, limit, Sort.by(Sort.Direction.DESC, "id"))));
-            Collections.reverse(window);
-        } else {
-            window = messageRepository.findByConversationIdOrderByIdAsc(conversationId);
+        int countLimit = llmProperties.maxHistoryMessages();
+        int tokenBudget = llmProperties.maxHistoryTokens();
+        List<Message> newestFirst = messageRepository.findByConversationId(
+                conversationId, PageRequest.of(0, HISTORY_SCAN_LIMIT, Sort.by(Sort.Direction.DESC, "id")));
+
+        List<LlmMessage> picked = new ArrayList<>();
+        int tokens = 0;
+        for (Message m : newestFirst) {
+            // 思考也计入：preserve_thinking 会把 reasoning_content 一起回传，它同样烧输入 token
+            int messageTokens = estimateTokens(m.getContent()) + estimateTokens(m.getReasoning());
+            boolean countFull = countLimit > 0 && picked.size() >= countLimit;
+            boolean budgetFull = tokenBudget > 0 && !picked.isEmpty() && tokens + messageTokens > tokenBudget;
+            if (countFull || budgetFull) {
+                break;
+            }
+            picked.add(new LlmMessage(m.getRole().name().toLowerCase(), m.getContent(), m.getReasoning()));
+            tokens += messageTokens;
         }
-        // 助手消息把存库的思考一起回传：qwen3.8 系 preserve_thinking 默认 true，
-        // 缺了 reasoning_content 虽不报错，但多轮推理质量会打折（官方 Chat 文档）
-        List<LlmMessage> messages = new ArrayList<>(window.stream()
-                .map(m -> new LlmMessage(m.getRole().name().toLowerCase(), m.getContent(), m.getReasoning()))
-                .toList());
+        Collections.reverse(picked);
         if (systemPrompt != null && !systemPrompt.isBlank()) {
-            messages.add(0, LlmMessage.of("system", systemPrompt.strip()));
+            picked.add(0, LlmMessage.of("system", systemPrompt.strip()));
         }
-        return messages;
+        return picked;
     }
+
+    /**
+     * 粗略 token 估算：中文约 1 字 1 token，其余字符约 4 字符 1 token。
+     * 没有分词器可用时这是误差最小的廉价近似；预算本身是保护性上限，不需要精确。
+     */
+    static int estimateTokens(String text) {
+        if (text == null || text.isEmpty()) {
+            return 0;
+        }
+        int cjk = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (isCjk(text.charAt(i))) {
+                cjk++;
+            }
+        }
+        return cjk + (text.length() - cjk + 3) / 4;
+    }
+
+    /** 中日韩文字与全角符号：这些在 Qwen 的分词里基本一字一 token。 */
+    private static boolean isCjk(char c) {
+        return (c >= 0x4E00 && c <= 0x9FFF)
+                || (c >= 0x3400 && c <= 0x4DBF)
+                || (c >= 0x3000 && c <= 0x303F)
+                || (c >= 0xFF00 && c <= 0xFFEF);
+    }
+
 
     /**
      * 用首条用户消息给会话起标题，否则侧边栏永远是一排「新的对话」。

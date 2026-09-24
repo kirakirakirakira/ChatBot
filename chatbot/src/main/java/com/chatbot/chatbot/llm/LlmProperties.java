@@ -21,6 +21,11 @@ public record LlmProperties(
         String apiKey,
         String model,
         @DefaultValue("20") int maxHistoryMessages,
+        /**
+         * 历史上下文的 token 预算：从最近一条往前累加估算 token，超预算就截断。
+         * 与 maxHistoryMessages 是「谁先满足谁生效」的关系；<=0 表示不限。
+         */
+        @DefaultValue("24000") int maxHistoryTokens,
         Boolean enableThinking,
         @DefaultValue("900") int requestTimeoutSeconds,
         /**
