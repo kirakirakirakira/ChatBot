@@ -39,16 +39,24 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     }
 
     @Override
-    public void streamChat(List<LlmMessage> messages, Boolean enableThinking, LlmStreamListener listener) {
+    public void streamChat(List<LlmMessage> messages, LlmCallOptions options, LlmStreamListener listener) {
         Map<String, Object> body = new HashMap<>();
-        body.put("model", props.model());
+        // 模型由调用方给定（service 层已校验白名单），不再读配置：配置里的 llm.model 只是「默认值」
+        body.put("model", options.model());
         body.put("stream", true);
         body.put("messages", messages);
-        // 思考开关：请求体里的 enableThinking 优先，没传则回落到 llm.enable-thinking；
+        // 用量只在流式最后一帧返回，必须显式要：不开 include_usage 就拿不到 token 数
+        body.put("stream_options", Map.of("include_usage", true));
+        // 思考开关：选项里的 enableThinking 优先，没传则回落到 llm.enable-thinking；
         // 两者都是 null 时不下发该参数，免得直连不认识 enable_thinking 的服务商报 400。
-        Boolean thinking = (enableThinking != null) ? enableThinking : props.enableThinking();
+        Boolean thinking = (options.enableThinking() != null) ? options.enableThinking() : props.enableThinking();
         if (thinking != null) {
             body.put("enable_thinking", thinking);
+        }
+        // 思考预算（思维链 token 上限）。只在显式给了值时下发：
+        // 超了该模型的「最大思维链长度」百炼会返回 400 并把上限写进错误文案，界面原样展示。
+        if (options.thinkingBudget() != null) {
+            body.put("thinking_budget", options.thinkingBudget());
         }
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -85,6 +93,16 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
                         break;
                     }
                     Chunk chunk = objectMapper.readValue(data, Chunk.class);
+                    // 带 usage 的那一帧 choices 是空的，必须在「空 choices 就跳过」之前先取用量
+                    if (chunk.usage() != null) {
+                        Usage u = chunk.usage();
+                        Integer reasoning = (u.completionTokensDetails() == null)
+                                ? null : u.completionTokensDetails().reasoningTokens();
+                        listener.onUsage(
+                                u.promptTokens() == null ? 0 : u.promptTokens(),
+                                u.completionTokens() == null ? 0 : u.completionTokens(),
+                                reasoning);
+                    }
                     if (chunk.choices() == null || chunk.choices().isEmpty()) {
                         continue;
                     }
@@ -109,7 +127,17 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         }
     }
 
-    record Chunk(List<Choice> choices) {
+    record Chunk(List<Choice> choices, Usage usage) {
+    }
+
+    /** 流式最后一帧的用量；字段缺失时为 null，不猜。 */
+    record Usage(
+            @JsonProperty("prompt_tokens") Integer promptTokens,
+            @JsonProperty("completion_tokens") Integer completionTokens,
+            @JsonProperty("completion_tokens_details") CompletionTokensDetails completionTokensDetails) {
+    }
+
+    record CompletionTokensDetails(@JsonProperty("reasoning_tokens") Integer reasoningTokens) {
     }
 
     record Choice(Delta delta) {

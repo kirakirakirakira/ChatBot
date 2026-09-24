@@ -7,18 +7,18 @@ DashScope or any other OpenAI-compatible model.
 > 中文全量说明（架构 / 逐文件清单 / 数据库 / API 全量表 / 核心流程 / 安全设计 / 扩展点 / 已知限制）见 [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)。
 > This README only covers how to get it running.
 
-> **Scope note / 范围说明**: "multi-user" here means **authentication and user management only**.
-> Conversations are **not** scoped per user (`conversation` has no `user_id`), so every logged-in user
-> sees — and can edit or delete — the same shared conversation list.
-> 「多用户」目前只指登录与用户管理；会话是全站共享的，不做用户隔离。见 PROJECT_OVERVIEW.md 第十三节。
+> **Scope note / 范围说明**: "multi-user" means login, user management, **and per-user conversation data**.
+> Every conversation belongs to exactly one user (`conversation.owner_id`); listing, reading, deleting and
+> chatting are all scoped to the owner, and cross-user access returns 404 — for admins too.
+> 「多用户」= 登录 + 用户管理 + 会话数据隔离：每个会话归属一个用户，越权访问（含管理员跨用户）一律 404。见 PROJECT_OVERVIEW.md 第九节。
 
 ## Tech Stack
 
 | Layer | Tech |
 | ----- | ---- |
 | Backend | Java 26, Spring Boot 4.1.1, Spring Data JPA, MySQL 8 |
-| Frontend | Vue 3.5, TypeScript 6, Vite 8 |
-| LLM | Bailian DashScope (OpenAI-compatible), streaming. No API key configured -> local mock LLM |
+| Frontend | Vue 3.5, TypeScript 6, Vite 8, markdown-it + highlight.js + DOMPurify (assistant-message rendering) |
+| LLM | Bailian DashScope (OpenAI-compatible), streaming, per-request model selection (`llm.available-models`) and thinking budget. No API key configured -> local mock LLM |
 
 ## Project Structure
 
@@ -48,7 +48,8 @@ the tables on first boot.
 
 Real secrets (DB password, LLM API key) must NOT be committed. Put them in
 `chatbot/src/main/resources/application-local.properties` (git-ignored) and run with the
-`local` profile, or export `DB_PASSWORD` / `LLM_API_KEY`. Full list of environment
+`local` profile, or export `DB_PASSWORD` / `LLM_API_KEY` / `DB_URL` / `DB_USERNAME` /
+`CORS_ALLOWED_ORIGINS`. Full list of environment
 variables: PROJECT_OVERVIEW.md, section 5.1.
 
 ### Frontend

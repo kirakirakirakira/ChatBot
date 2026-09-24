@@ -10,5 +10,9 @@ import jakarta.validation.constraints.NotBlank;
  */
 public record ChatRequest(
         @NotBlank(message = "message 不能为空") String message,
-        Boolean enableThinking) {
+        Boolean enableThinking,
+        /** 本次使用的模型 id；null = 用服务端 llm.model。必须落在 llm.available-models 白名单里，否则 400。 */
+        String model,
+        /** 思考预算（思维链 token 上限）；null = 不下发 thinking_budget。思考关闭时后端忽略它。 */
+        Integer thinkingBudget) {
 }

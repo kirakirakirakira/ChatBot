@@ -14,10 +14,12 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
   白名单模式：新加的接口默认受保护，不用改配置。
 - token 是自签 HMAC-SHA256，无状态。`auth.token-secret` **少于 32 字符后端直接启动失败**；
   改密码后旧 token 立即失效（payload 的 `iat` 用毫秒，与 `password_changed_at` 比对）。
-- **会话不按用户隔离**：`conversation` 表没有 `user_id`，`ConversationController` / `ChatController` 也不接 `CurrentUser`，
-  因此所有登录用户共享同一份会话列表，并能读取、写入、删除彼此的会话。`GET /api/conversations/{id}/messages`
-  和 `DELETE /api/conversations/{id}` 都不校验归属。这里的「多用户」只体现在鉴权与用户管理上，不是数据隔离。
-  要做隔离需要：加列 + 改 3 个查询 + 两个控制器接 `CurrentUser` + service 层校验归属（见 PROJECT_OVERVIEW.md 13.1 第 1 条）。
+- **会话按用户隔离**：`conversation.owner_id` 记录归属，会话相关接口的控制器都接 `CurrentUser`，校验统一在 service 层。
+  查不到或不是自己的会话**一律 404，不返回 403**——403 会把「这个 id 确实存在」泄露出去，而 id 是自增的，
+  等于让人枚举出全站有多少会话。管理员也没有跨用户特权。
+- **消息接口是分页的**：`GET /api/conversations/{id}/messages` 返回 `{items, beforeId, hasMore}` 而不是数组，
+  `before`（id 游标）和 `limit`（默认 50、上限 200）走 query 参数。用游标不用 offset：
+  一边翻页一边有新消息入库时，offset 分页会重复或漏消息。
 
 会话标题：发出第一条消息时，自动用该消息前 30 字替换「新的对话」，前端侧边栏可以直接显示。
 
@@ -29,12 +31,14 @@ JSON，null 字段不输出：
 |---|---|---|
 | reasoning | `{"type":"reasoning","content":"..."}` | 思考过程增量，出现在正式回答之前。仅推理模型且 `llm.enable-thinking=true` 时出现 |
 | delta | `{"type":"delta","content":"..."}` | 正式回答的增量文本，逐段推送 |
-| done | `{"type":"done","messageId":123}` | 生成结束，助手消息已入库 |
+| done | `{"type":"done","messageId":123,"model":"...","prompt_tokens":4,"completion_tokens":30,"reasoning_tokens":12}` | 生成结束，助手消息已入库；**附带 model 与用量**（NON_NULL），前端当场回填用量行 |
 | error | `{"type":"error","content":"..."}` | 出错。**文案在 `content`，不是 `message` 字段** |
 
-`reasoning` 是过程展示，不属于助手消息正文，**后端不入库**：刷新页面只会看到 delta 拼出来的回答。
+`reasoning` 是过程展示，不属于助手消息正文：正文 `content` 永远只含 delta 拼出来的回答。思考全文在生成结束时随助手消息入库（`message.reasoning`），刷新页面后折叠块还能展开重读；没开启思考时该列为 NULL、接口也不下发这个字段。
 前端不认识某个 type 时忽略即可，delta / done / error 的老契约没变。
 建议用法：收到第一帧 reasoning 就显示「思考中…」并可折叠展示，收到第一帧 delta 再切到正文。
+
+`POST /api/conversations/{id}/regenerate` **复用这一套事件**，没有第二份 SSE 契约：它先删掉最后一条助手消息，再用它前面那条用户消息重跑生成；请求体可省略（只带 `enableThinking` 或干脆不带）。最后一条不是助手消息、或会话是空的，返回 400。
 
 ### 为什么必须转发思考
 
@@ -73,6 +77,11 @@ $h = "Authorization: Bearer $tok"
 
 curl.exe -s -X POST http://localhost:8089/api/conversations -H $h
 curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":"你好"}'
+curl.exe -s "http://localhost:8089/api/conversations/1/messages?limit=5" -H $h   # 分页：返回 {items, beforeId, hasMore}
+curl.exe -s -X PUT http://localhost:8089/api/conversations/1/title -H $h -H "Content-Type: application/json" -d '{"title":"新名字"}'
+curl.exe -N -X POST http://localhost:8089/api/conversations/1/regenerate -H $h -H "Content-Type: application/json" -d '{}'
+curl.exe -s http://localhost:8089/api/llm/options -H $h
+curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":"你好","model":"qwen3.8-max","thinkingBudget":16384}'
 curl.exe -s -i http://localhost:8089/api/conversations/99999/messages -H $h
 curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":""}'
 ```
@@ -88,9 +97,12 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 | auth.token-secret | dev 占位值 | **少于 32 字符启动失败**，生产必须用环境变量覆盖 |
 | auth.token-ttl-hours | 12 | 过期返回 401，前端自动弹回登录页 |
 | auth.default-admin-username / -password | admin / admin | 仅在 `sys_user` 为空表时由 `AdminUserInitializer` 兜底创建，等价于 `init.sql` 里的 `INSERT IGNORE`；不会覆盖谁改过的密码 |
+| spring.datasource.url / username | localhost:3306/chatbot / root | 有 `DB_URL` / `DB_USERNAME` 占位符，换环境不用改文件 |
+| cors.allowed-origins | http://localhost:5173 | 跨域白名单，逗号分隔多个；**留空启动失败**。对外部署用 `CORS_ALLOWED_ORIGINS` 覆盖 |
 | llm.base-url | 百炼 compatible-mode | 任何 OpenAI 兼容接口都能直连 |
 | llm.api-key | 空 | 留空自动走 `MockLlmClient` |
-| llm.model | qwen3.6-flash | |
+| llm.model | qwen3.6-flash | **只是默认值**：请求体带 `model` 时以请求为准 |
+| llm.available-models | qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max | 界面可选模型白名单（逗号分隔，`LLM_AVAILABLE_MODELS` 可覆盖）。请求里的 `model` 不在里面就 400，错误文案里带上清单 |
 | llm.enable-thinking | true | 映射为请求体顶层的 `enable_thinking`，取舍见下 |
 | llm.request-timeout-seconds | 900 | 整轮生成的上限，**不是空闲超时**。SSE 超时自动取它 +30 秒 |
 | llm.max-history-messages | 20 | 每轮只把最近 N 条历史送给模型，<=0 表示不限制 |
@@ -108,6 +120,13 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 实测思考到 **31407 字、正式回答 0 字**，全部作废但思考 token 照样计费。
 
 这里配的只是默认值：前端每条消息可以在请求体传 `"enableThinking": true/false` 单独开关。
+
+**思考强度（`thinking_budget`）**：请求体可带正整数，限制思维链 token 上限；不传则用模型默认（qwen3.8 系默认 131072）。
+界面档位 4096 / 16384 / 131072 对齐百炼 `reasoning_effort` 的 low / medium 映射；**`thinking_budget` 与 `reasoning_effort` 不能同时设置**（qwen3.8 系），我们只发前者。
+超过某模型的「最大思维链长度」会返回 400 并在文案里写明上限（qwen3.6-flash 是 131072，qwen3.8 系是 262144）。
+
+**preserve_thinking**：qwen3.8-max / qwen3.8-flash 默认 true，要求历史 assistant 消息把 `reasoning_content` 完整回传、且不支持拼进 `content`。
+我们把存库的思考随历史带上；缺了不报错，但多轮推理质量会打折。
 换到不认识 `enable_thinking` 的服务商（OpenAI、DeepSeek 等）时，把 properties 里那行整行注释掉，
 后端就不下发该参数，请求体回到改造之前的样子。
 
@@ -121,9 +140,9 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
     entity/      Conversation / Message / User / Role
     dto/         请求与响应对象，含统一错误体 ErrorResponse、SSE 事件体 ChatEvent
     llm/         LlmClient 接口 + LlmStreamListener（思考/回答双通道回调）+ Mock 与 OpenAI 兼容实现
-    config/      WebConfig（CORS + 拦截器 + 参数解析器）、AuthConfig（BCrypt）、LlmConfig、
-                 AdminUserInitializer、GlobalExceptionHandler
+    config/      WebConfig（CORS + 拦截器 + 参数解析器）、CorsProperties（CORS 白名单）、
+                 AuthConfig（BCrypt）、LlmConfig、AdminUserInitializer、GlobalExceptionHandler
 
 ## 后续待加
 
-会话重命名接口、重新生成、token 用量统计、消息分页。
+会话重命名接口、暂无。会话重命名、重新生成、token 用量统计均已于 2026-09-24 完成。

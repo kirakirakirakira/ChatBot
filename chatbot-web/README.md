@@ -38,9 +38,17 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 任何接口返回 **401 都当作「会话已失效」**：`api.ts` 调 `clearSession()`，`App.vue` 随之弹回登录页。
 因此不存在绕过登录能访问的页面，也不需要路由守卫。
 
-> 但**登录 ≠ 数据隔离**：侧边栏里的会话是全站共享的（后端 `conversation` 表没有 `user_id`），
-> 换账号登录看到的还是同一份列表。前端不需要为此做任何处理，也不要误以为侧边栏是「我的会话」。
-> 详见 `chatbot/README.md`「接口」一节与 `PROJECT_OVERVIEW.md` 13.1。
+> **侧边栏就是「我的会话」**：后端按 `conversation.owner_id` 隔离，换账号登录看到的是另一个人的列表。
+> 越权访问别人的会话后端返回 404，前端当成「会话不存在」处理即可，不需要额外分支。
+
+输入条上有两个选择器：**模型**（清单来自 `GET /api/llm/options`，即后端 `llm.available-models`）和**思考强度**（`thinking_budget`：不限 / 4096 / 16384 / 131072）。
+两者都随每条消息下发并存在 localStorage；存过的模型若已不在白名单（配置改了），回落到服务端默认，而不是留一个后端会 400 的 id。
+助手气泡底部有一行用量：`模型 · 输入 x / 输出 y tokens（含思考 z）`。
+
+消息历史是**游标分页**：`getMessages(id, {before, limit})` 只取最新一页（默认 50 条），
+`ChatView` 在还有更早消息时于消息区顶部显示「加载更早的消息」，点击后把上一页插到列表头部并补偿滚动位置
+（不补偿的话，往顶部插 50 条会把视口顶下去，用户正在读的那条消息直接跑掉）。
+`types.ts` 的 `MessagePage` 对应后端 `MessagePageVO`。
 
 改密码成功后后端会换发新 token（响应体就是一份新的 `LoginResponse`），前端用它覆盖本地 token，当前会话不中断。
 
@@ -56,30 +64,45 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 事件契约（reasoning / delta / done / error 的形状与语义）由后端定义，见 [chatbot/README.md](../chatbot/README.md)。
 前端侧的约定：
 
-- `reasoning` 是思考过程，不属于消息正文，后端也不入库。收到第一帧就显示「思考中…」，做成可折叠
+- `reasoning` 是思考过程，不属于消息正文。流式期间收到第一帧就显示「思考中…」并做成可折叠；生成结束后后端已把它存进 `message.reasoning`，所以**刷新页面后历史消息的思考也能展开重读**（`UiMessage.reasoning` 从接口读回）
 - 收到第一帧 `delta` 再切到正文渲染
 - 遇到不认识的 `type` 直接忽略，保持向后兼容
 - **停止生成 = abort 这个 fetch**，不需要调额外接口；后端会停止调用模型并把已生成的部分入库，刷新页面能看到
+- `done` 事件除 `messageId` 外还带 `model` 与用量（`prompt_tokens` / `completion_tokens` / `reasoning_tokens`）：前端在 `onDone` 里当场回填，用量行不用等刷新页面才出现
+- **重新生成 = `POST /{id}/regenerate`**，SSE 契约与 `/chat` 相同（`api.ts` 里两者共用 `consumeSse()`）。前端先本地摘掉最后一条助手消息再接流；后端会删库里的旧回答、用同一条用户消息重跑，所以历史不会攒出两份回答
 - 空闲超过 60 秒连接会被中间层掐断，正常情况下后端转发思考帧会一直有字节流动
 
-`MessageBubble.vue` 负责正文渲染、思考过程折叠和流式打字光标。
-**正文是纯文本**（`{{ message.content }}` + `white-space: pre-wrap`），项目没有引入任何 Markdown 渲染库，
-代码块 / 列表 / 表格都按原样显示；要加 Markdown 得先引依赖，并同步更新 `PROJECT_OVERVIEW.md` 4.1 与 13.1。
+## Markdown 渲染
+
+助手消息正文走 `lib/markdown.ts` + `components/MarkdownContent.vue`：标题 / 列表 / 表格 / 引用 / 代码块都正常渲染，
+代码块带语言标签、语法高亮（highlight.js 的 common 语言子集）和一键复制按钮。
+
+三个刻意的取舍：
+
+- **用户消息不渲染 Markdown**，保持纯文本。用户输入的是「话」不是文档，把里面的 `* _ #` 渲染掉只会让人困惑。
+- **安全两道锁**：markdown-it 开 `html:false`（输入里的原始 HTML 全部转义成文本），渲染结果再过一遍 DOMPurify。
+  渲染的是模型输出，属于不可信文本，值得两道锁。
+- **代码块固定深色底**，不跟暗色模式切换：浅色主题下深色代码块对比度更好，也省一套主题 CSS。
+
+流式生成期间每个 delta 都会重渲染一次：markdown-it 渲染几 KB 文本是亚毫秒级，不做增量缓存。
+复制按钮是渲染产物、不在 Vue 事件体系里，靠容器上的委托监听处理；剪贴板写失败会显示「复制失败」，不假装成功。
 
 ## 目录结构
 
     src/
-      api.ts        请求封装：鉴权头、401 处理、SSE 读流
+      api.ts        请求封装：鉴权头、401 处理、SSE 读流、消息分页参数
       auth.ts       登录态：token / currentUser / isAdmin
       types.ts      类型定义，与后端 DTO / VO 一一对应
+      lib/markdown.ts  markdown-it + highlight.js + DOMPurify：助手消息的 Markdown 渲染
       App.vue       根组件 = 权限闸门
       main.ts       入口
       views/
         LoginView.vue   登录页
-        ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 + 停止生成
+        ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 / 模型 / 思考强度 + 停止生成
       components/
-        ConversationSidebar.vue   会话列表，按 updated_at 倒序，支持新建 / 删除
-        MessageBubble.vue         消息气泡，区分 user / assistant；纯文本渲染（无 Markdown）+ 思考折叠 + 打字光标
+        ConversationSidebar.vue   会话列表，按 updated_at 倒序，支持新建 / 删除 / 双击改名
+        MessageBubble.vue         消息气泡，区分 user / assistant；助手消息走 Markdown、用户消息纯文本 + 思考折叠 + 重新生成按钮
+        MarkdownContent.vue       Markdown 渲染容器：代码高亮 + 代码块复制按钮 + 流式光标
         ChangePasswordDialog.vue  修改密码，所有人可见
         UserListDialog.vue        用户管理，仅 isAdmin 时可见
       assets/main.css

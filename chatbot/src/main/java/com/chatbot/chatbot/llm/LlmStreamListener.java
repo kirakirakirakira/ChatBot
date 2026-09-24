@@ -12,4 +12,13 @@ public interface LlmStreamListener {
 
     /** 正式回答的增量文本（content）。 */
     void onToken(String text);
+
+    /**
+     * 本轮用量（流式结束时的最后一帧带 usage，需要请求体里开 stream_options.include_usage）。
+     * 默认空实现：不关心成本的调用方无需重写。
+     *
+     * @param reasoningTokens 思考占的输出 token；服务商没给细节时为 null
+     */
+    default void onUsage(int promptTokens, int completionTokens, Integer reasoningTokens) {
+    }
 }

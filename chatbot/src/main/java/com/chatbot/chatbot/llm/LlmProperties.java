@@ -3,6 +3,8 @@ package com.chatbot.chatbot.llm;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.bind.DefaultValue;
 
+import java.util.List;
+
 /**
  * application.properties 中 llm.* 配置。
  *
@@ -20,5 +22,10 @@ public record LlmProperties(
         String model,
         @DefaultValue("20") int maxHistoryMessages,
         Boolean enableThinking,
-        @DefaultValue("900") int requestTimeoutSeconds) {
+        @DefaultValue("900") int requestTimeoutSeconds,
+        /**
+         * 界面可选的模型白名单（逗号分隔）。请求里带的 model 必须在这里面，否则 400——
+         * 既防手滑填错模型名，也防把请求打到没买额度 / 没开权限的模型上。
+         */
+        @DefaultValue("qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max") List<String> availableModels) {
 }

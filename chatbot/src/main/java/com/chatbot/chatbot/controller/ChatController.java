@@ -1,6 +1,8 @@
 package com.chatbot.chatbot.controller;
 
+import com.chatbot.chatbot.auth.CurrentUser;
 import com.chatbot.chatbot.dto.ChatRequest;
+import com.chatbot.chatbot.dto.RegenerateRequest;
 import com.chatbot.chatbot.service.ChatService;
 import jakarta.validation.Valid;
 import org.springframework.http.MediaType;
@@ -21,9 +23,24 @@ public class ChatController {
         this.chatService = chatService;
     }
 
-    /** 发送消息，SSE 流式返回 AI 回复。 */
+    /**
+     * 发送消息，SSE 流式返回 AI 回复。
+     * CurrentUser 必须在进 service 之前就解析好：SSE 是异步接口，生成跑在别的线程上，
+     * 那里拿不到 request attribute，也就补不了归属校验。
+     */
     @PostMapping(value = "/{id}/chat", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter chat(@PathVariable Long id, @Valid @RequestBody ChatRequest request) {
-        return chatService.chat(id, request);
+    public SseEmitter chat(@PathVariable Long id, @Valid @RequestBody ChatRequest request, CurrentUser user) {
+        return chatService.chat(id, request, user);
+    }
+
+    /**
+     * 重新生成最后一条回答：删掉它并用同一条用户消息重跑。SSE 契约与 /chat 完全一致。
+     * 请求体可省略（只带 enableThinking 或干脆不带）。
+     */
+    @PostMapping(value = "/{id}/regenerate", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter regenerate(@PathVariable Long id,
+                                 @RequestBody(required = false) RegenerateRequest request,
+                                 CurrentUser user) {
+        return chatService.regenerate(id, request, user);
     }
 }

@@ -72,7 +72,4 @@ HELP.md
 application-local.properties
 .env
 
-# Local manual test script (intentionally untracked)
-chatbot/test_sse.py
-
 AGENTS.md

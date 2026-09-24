@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { nextTick, ref } from 'vue'
 import type { Conversation } from '@/types'
 
 defineProps<{
@@ -12,7 +13,45 @@ const emit = defineEmits<{
   select: [id: number]
   create: []
   remove: [id: number]
+  rename: [id: number, title: string]
 }>()
+
+/** 正在行内改名的会话 id；同一时刻只允许一个，null = 没在改。 */
+const editingId = ref<number | null>(null)
+const draft = ref('')
+const renameInput = ref<HTMLInputElement | null>(null)
+
+/** v-for 里的 ref 会编译成数组，用函数 ref 只收当前这一个输入框。 */
+function setRenameInput(el: unknown): void {
+  renameInput.value = el instanceof HTMLInputElement ? el : null
+}
+
+function startRename(id: number, title: string): void {
+  editingId.value = id
+  draft.value = title
+  void nextTick(() => {
+    renameInput.value?.focus()
+    renameInput.value?.select()
+  })
+}
+
+/** Enter 或失焦提交。先清 editingId：输入框随之卸载，blur 再触发时这里的守卫会挡掉第二次提交。 */
+function commitRename(id: number): void {
+  if (editingId.value !== id) {
+    return
+  }
+  editingId.value = null
+  const title = draft.value.trim()
+  if (!title) {
+    return // 空标题等于没改，静默取消；后端 @NotBlank 也兜着
+  }
+  emit('rename', id, title)
+}
+
+/** Esc 取消：输入框直接卸载，不会走 blur 提交。 */
+function cancelRename(): void {
+  editingId.value = null
+}
 
 /** 今天显示 HH:mm，更早显示 MM-DD。 */
 function formatTime(iso: string): string {
@@ -47,7 +86,20 @@ function formatTime(iso: string): string {
         :class="{ active: c.id === activeId }"
         @click="emit('select', c.id)"
       >
-        <span class="conv-title" :title="c.title">{{ c.title }}</span>
+        <!-- 双击标题行内改名：Enter / 失焦提交，Esc 取消。
+             输入框上 @click.stop，否则点输入框会把整个 li 的 select 也触发掉 -->
+        <input
+          v-if="editingId === c.id"
+          :ref="setRenameInput"
+          v-model="draft"
+          class="conv-rename"
+          maxlength="100"
+          @click.stop
+          @keydown.enter="commitRename(c.id)"
+          @keydown.esc="cancelRename()"
+          @blur="commitRename(c.id)"
+        />
+        <span v-else class="conv-title" :title="c.title + '（双击重命名）'" @dblclick.stop="startRename(c.id, c.title)">{{ c.title }}</span>
         <span class="conv-time">{{ formatTime(c.updatedAt) }}</span>
         <button
           class="conv-delete"
@@ -127,6 +179,18 @@ function formatTime(iso: string): string {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 14px;
+}
+
+.conv-rename {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
 }
 
 .conv-time {

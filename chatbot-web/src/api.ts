@@ -1,4 +1,4 @@
-import type { ChatStreamEvent, Conversation, CurrentUser, LoginResult, Message } from '@/types'
+import type { ChatStreamEvent, Conversation, CurrentUser, LlmOptions, LoginResult, MessagePage } from '@/types'
 import { clearSession, token } from '@/auth'
 
 const BASE = '/api'
@@ -89,12 +89,69 @@ export function listConversations(): Promise<Conversation[]> {
   return request<Conversation[]>('/conversations')
 }
 
-export function getMessages(conversationId: number): Promise<Message[]> {
-  return request<Message[]>(`/conversations/${conversationId}/messages`)
+/** 消息分页查询参数。 */
+export interface MessagePageQuery {
+  /** 游标：只取 id 小于它的消息，值来自上一页响应的 beforeId。不传就是最新一页。 */
+  before?: number | null
+  /** 单页条数。后端默认 50、上限 200（超出按上限截断，不报 400）。 */
+  limit?: number
+}
+
+/**
+ * 取某个会话的消息，**从最新往前翻**。
+ * 返回的 items 已经是时间正序；要继续往前翻就把响应里的 beforeId 当 before 传回来。
+ * 用 id 游标而不是页码：一边翻页一边有新消息入库时，offset 分页会重复或漏消息。
+ */
+export function getMessages(conversationId: number, query?: MessagePageQuery): Promise<MessagePage> {
+  const params = new URLSearchParams()
+  if (query?.before != null) {
+    params.set('before', String(query.before))
+  }
+  if (query?.limit != null) {
+    params.set('limit', String(query.limit))
+  }
+  const qs = params.toString()
+  return request<MessagePage>(`/conversations/${conversationId}/messages${qs ? `?${qs}` : ''}`)
+}
+
+/**
+ * 重命名会话。返回更新后的会话对象，调用方直接覆盖本地那一条即可。
+ * 后端刻意不刷新 updated_at：改名不是「活动」，不该把会话顶到列表最前面。
+ */
+export function renameConversation(conversationId: number, title: string): Promise<Conversation> {
+  return request<Conversation>(`/conversations/${conversationId}/title`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  })
 }
 
 export function deleteConversation(conversationId: number): Promise<void> {
   return request<void>(`/conversations/${conversationId}`, { method: 'DELETE' })
+}
+
+/** 模型选项：界面选择器的数据源，来自配置 llm.available-models。 */
+export function fetchLlmOptions(): Promise<LlmOptions> {
+  return request<LlmOptions>('/llm/options')
+}
+
+/**
+ * 单次生成的可调项。三个都可选：
+ * enableThinking 不传 = 用服务端 llm.enable-thinking；model 不传 = 用服务端 llm.model；
+ * thinkingBudget 不传 = 不下发 thinking_budget（思考关着时后端也会忽略它）。
+ */
+export interface StreamOptions {
+  enableThinking?: boolean
+  model?: string
+  thinkingBudget?: number | null
+}
+
+/** done 事件带回来的用量，字段名与后端 JSON 一致（下划线）。 */
+export interface MessageUsage {
+  model?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  reasoning_tokens?: number
 }
 
 export interface StreamHandlers {
@@ -102,8 +159,8 @@ export interface StreamHandlers {
   onReasoning?: (text: string) => void
   /** 正式回答增量。 */
   onDelta: (text: string) => void
-  /** 本轮生成结束，messageId 是入库后的助手消息 id。 */
-  onDone?: (messageId?: number) => void
+  /** 本轮生成结束，messageId 是入库后的助手消息 id；usage 是这条回答的模型与 token 用量。 */
+  onDone?: (messageId?: number, usage?: MessageUsage) => void
   /** 后端通过 SSE error 事件报出的生成错误。 */
   onError?: (message: string) => void
 }
@@ -123,14 +180,11 @@ export interface StreamHandlers {
 export async function streamChat(
   conversationId: number,
   message: string,
-  enableThinking: boolean | undefined,
+  options: StreamOptions,
   handlers: StreamHandlers,
   signal: AbortSignal,
 ): Promise<void> {
-  const body: Record<string, unknown> = { message }
-  if (enableThinking !== undefined) {
-    body.enableThinking = enableThinking
-  }
+  const body: Record<string, unknown> = { message, ...pickStreamOptions(options) }
 
   const response = await fetch(`${BASE}/conversations/${conversationId}/chat`, {
     method: 'POST',
@@ -140,15 +194,67 @@ export async function streamChat(
   })
 
   if (!response.ok || !response.body) {
-    // 还没升级成 SSE 就失败（如 401 未登录、404 会话不存在、400 参数校验）：响应体是 JSON 错误
-    const message = await extractErrorMessage(response)
-    if (response.status === 401) {
-      clearSession()
-    }
-    throw new Error(message)
+    await throwIfNotOk(response)
   }
+  await consumeSse(response, handlers)
+}
 
-  const reader = response.body.getReader()
+/**
+ * 重新生成最后一条回答。SSE 契约与 streamChat 完全一致，差别只在端点和请求体：
+ * 后端先删掉最后一条助手消息，再用它前面那条用户消息重跑，所以历史不会攒出两份回答。
+ *
+ * @param enableThinking 语义同 streamChat：undefined = 用服务端 llm.enable-thinking 配置。
+ */
+export async function streamRegenerate(
+  conversationId: number,
+  options: StreamOptions,
+  handlers: StreamHandlers,
+  signal: AbortSignal,
+): Promise<void> {
+  const body: Record<string, unknown> = { ...pickStreamOptions(options) }
+  const response = await fetch(`${BASE}/conversations/${conversationId}/regenerate`, {
+    method: 'POST',
+    headers: withAuth({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!response.ok || !response.body) {
+    await throwIfNotOk(response)
+  }
+  await consumeSse(response, handlers)
+}
+
+/** 还没升级成 SSE 就失败（401 / 404 / 400 等）：响应体是 JSON 错误，走统一的错误提取。 */
+async function throwIfNotOk(response: Response): Promise<never> {
+  const message = await extractErrorMessage(response)
+  if (response.status === 401) {
+    clearSession()
+  }
+  throw new Error(message)
+}
+
+/** 把可选项里「给了值」的字段挑进请求体；没给的不下发，让服务端用配置默认值。 */
+function pickStreamOptions(options: StreamOptions): Record<string, unknown> {
+  const body: Record<string, unknown> = {}
+  if (options.enableThinking !== undefined) {
+    body.enableThinking = options.enableThinking
+  }
+  if (options.model) {
+    body.model = options.model
+  }
+  if (options.thinkingBudget != null) {
+    body.thinkingBudget = options.thinkingBudget
+  }
+  return body
+}
+
+/** 读 SSE 流并按帧分发。chat 与 regenerate 共用同一套解析。 */
+async function consumeSse(response: Response, handlers: StreamHandlers): Promise<void> {
+  const body = response.body
+  if (!body) {
+    throw new Error('响应没有可读的流')
+  }
+  const reader = body.getReader()
   const decoder = new TextDecoder('utf-8')
   let buffer = ''
 
@@ -198,7 +304,12 @@ function dispatchEvent(rawEvent: string, handlers: StreamHandlers): void {
       handlers.onDelta(event.content ?? '')
       break
     case 'done':
-      handlers.onDone?.(event.messageId)
+      handlers.onDone?.(event.messageId, {
+        model: event.model,
+        prompt_tokens: event.prompt_tokens,
+        completion_tokens: event.completion_tokens,
+        reasoning_tokens: event.reasoning_tokens,
+      })
       break
     case 'error':
       handlers.onError?.(event.content ?? '未知错误')

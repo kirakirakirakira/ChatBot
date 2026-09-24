@@ -1,17 +1,21 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ConversationSidebar from '@/components/ConversationSidebar.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 import UserListDialog from '@/components/UserListDialog.vue'
 import type { LoginResult, UiMessage } from '@/types'
+import type { StreamHandlers, StreamOptions } from '@/api'
 import { clearSession, currentUser, isAdmin, setSession } from '@/auth'
 import {
   createConversation,
   deleteConversation,
+  fetchLlmOptions,
   getMessages,
+  renameConversation,
   listConversations,
   streamChat,
+  streamRegenerate,
 } from '@/api'
 
 const conversations = ref<Awaited<ReturnType<typeof listConversations>>>([])
@@ -20,8 +24,33 @@ const messages = ref<UiMessage[]>([])
 const input = ref('')
 const streaming = ref(false)
 const loadingMessages = ref(false)
+/** 消息分页：还有没有更早的、往前翻的游标、以及「加载更早」按钮自己的 loading。 */
+const hasMoreOlder = ref(false)
+const olderCursor = ref<number | null>(null)
+const loadingOlder = ref(false)
+/** 单页条数，和后端 ConversationService.DEFAULT_PAGE_SIZE 保持一致（后端上限 200）。 */
+const PAGE_SIZE = 50
 /** 思考开关：显式传 true/false（每条消息生效）。想改用服务端默认配置，把它设为 undefined 传给 api 即可。 */
 const thinkingOn = ref(true)
+/** 模型选择器：清单来自后端 /api/llm/options（配置 llm.available-models），选中值存 localStorage。 */
+const llmModels = ref<string[]>([])
+const selectedModel = ref('')
+/**
+ * 思考强度档位，值是思维链 token 上限（Chat Completions 的 thinking_budget）；'' = 不限，不下发该参数、用模型默认。
+ * 档位对齐百炼官方 reasoning_effort 的映射（low=4096 / medium=16384），「深入」取 131072：
+ * 它既是 qwen3.8 系的默认值，也正好是 qwen3.6-flash 的最大思维链长度，对全部可选模型都合法。
+ * 再往上（262144 = xhigh）只有 qwen3.8 系吃得下，qwen3.6-flash 会返回 400，所以不放进档位。
+ */
+const thinkingBudgetSel = ref('')
+const THINKING_BUDGET_CHOICES: { value: string; label: string }[] = [
+  { value: '', label: '思考强度：不限' },
+  { value: '4096', label: '精简 4k' },
+  { value: '16384', label: '均衡 16k' },
+  { value: '131072', label: '深入 128k' },
+]
+
+watch(selectedModel, (v) => localStorage.setItem('chatbot.model', v))
+watch(thinkingBudgetSel, (v) => localStorage.setItem('chatbot.thinkingBudget', v))
 /** 会话列表加载失败、删除失败这类全局错误，横幅展示。 */
 const fatalError = ref('')
 const showPasswordDialog = ref(false)
@@ -68,6 +97,37 @@ function onPasswordChanged(result: LoginResult): void {
   setSession(result.token, result.user)
 }
 
+/**
+ * 拉模型清单并恢复上次的选择。存过的模型若已不在白名单里（配置改了），回落到服务端默认，
+ * 而不是把一个后端会 400 的 id 留在界面上。
+ */
+async function loadLlmOptions(): Promise<void> {
+  try {
+    const options = await fetchLlmOptions()
+    llmModels.value = options.models
+    const stored = localStorage.getItem('chatbot.model')
+    const fallback = options.models.includes(options.defaultModel)
+      ? options.defaultModel
+      : (options.models[0] ?? '')
+    selectedModel.value = stored && options.models.includes(stored) ? stored : fallback
+    const storedBudget = localStorage.getItem('chatbot.thinkingBudget')
+    thinkingBudgetSel.value = THINKING_BUDGET_CHOICES.some((c) => c.value === storedBudget)
+      ? (storedBudget ?? '')
+      : ''
+  } catch (e) {
+    fatalError.value = errMsg(e)
+  }
+}
+
+/** 本轮生成的可调项。思考关着时预算不传：后端同样会忽略，但少传一个不生效的字段更干净。 */
+function streamOptions(): StreamOptions {
+  return {
+    enableThinking: thinkingOn.value,
+    model: selectedModel.value || undefined,
+    thinkingBudget: thinkingOn.value && thinkingBudgetSel.value ? Number(thinkingBudgetSel.value) : undefined,
+  }
+}
+
 async function loadConversations(): Promise<void> {
   try {
     conversations.value = await listConversations()
@@ -88,10 +148,24 @@ async function selectConversation(id: number): Promise<void> {
   activeId.value = id
   activeIsEmpty.value = false
   loadingMessages.value = true
+  resetPaging()
   try {
-    const history = await getMessages(id)
-    messages.value = history.map((m) => ({ id: m.id, role: m.role, content: m.content }))
-    activeIsEmpty.value = history.length === 0
+    // 只取最新一页，更早的靠「加载更早的消息」按需翻，不再一次性把整段历史拉下来渲染
+    const page = await getMessages(id, { limit: PAGE_SIZE })
+    // reasoning / model / 用量都从库里读回来：刷新后仍能展开思考、看到这条回答是谁花的钱
+    messages.value = page.items.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      reasoning: m.reasoning,
+      model: m.model,
+      promptTokens: m.promptTokens,
+      completionTokens: m.completionTokens,
+      reasoningTokens: m.reasoningTokens,
+    }))
+    hasMoreOlder.value = page.hasMore
+    olderCursor.value = page.beforeId
+    activeIsEmpty.value = page.items.length === 0
     fatalError.value = ''
     scrollToBottom()
   } catch (e) {
@@ -103,6 +177,63 @@ async function selectConversation(id: number): Promise<void> {
   // 切换成功后再清理空对话：切换失败时用户还停在原对话上，不能把它删了
   if (leavingWasEmpty && leavingId !== null) {
     await discardEmptyConversation(leavingId)
+  }
+}
+
+function resetPaging(): void {
+  hasMoreOlder.value = false
+  olderCursor.value = null
+  loadingOlder.value = false
+}
+
+/**
+ * 往前翻一页历史，插到列表最前面。
+ *
+ * 必须保住滚动位置：往顶部插内容会把视口「顶」下去，用户正在读的那条消息就跑了。
+ * 做法是记下插入前的 scrollHeight，插入后把高度差补回 scrollTop，视觉上等于没动。
+ *
+ * 生成期间禁用：流式增量一直在往底部追加，这时候往顶部插 50 条会把滚动补偿算歪。
+ */
+async function loadOlder(): Promise<void> {
+  const id = activeId.value
+  if (id === null || olderCursor.value === null) {
+    return
+  }
+  if (loadingOlder.value || streaming.value || loadingMessages.value) {
+    return
+  }
+  const el = scroller.value
+  const prevHeight = el?.scrollHeight ?? 0
+  const prevTop = el?.scrollTop ?? 0
+  loadingOlder.value = true
+  try {
+    const page = await getMessages(id, { before: olderCursor.value, limit: PAGE_SIZE })
+    // 等待期间用户可能已经切到别的会话，这一页属于旧会话，直接丢掉
+    if (activeId.value !== id) {
+      return
+    }
+    const older = page.items.map((m) => ({
+      id: m.id,
+      role: m.role,
+      content: m.content,
+      reasoning: m.reasoning,
+      model: m.model,
+      promptTokens: m.promptTokens,
+      completionTokens: m.completionTokens,
+      reasoningTokens: m.reasoningTokens,
+    }))
+    messages.value = [...older, ...messages.value]
+    hasMoreOlder.value = page.hasMore
+    olderCursor.value = page.beforeId
+    await nextTick()
+    if (el) {
+      el.scrollTop = prevTop + (el.scrollHeight - prevHeight)
+    }
+    fatalError.value = ''
+  } catch (e) {
+    fatalError.value = errMsg(e)
+  } finally {
+    loadingOlder.value = false
   }
 }
 
@@ -154,6 +285,7 @@ async function removeConversation(id: number): Promise<void> {
       activeId.value = null
       messages.value = []
       activeIsEmpty.value = false
+      resetPaging()
     }
     await loadConversations()
     if (activeId.value === null) {
@@ -162,6 +294,24 @@ async function removeConversation(id: number): Promise<void> {
         await selectConversation(first.id)
       }
     }
+  } catch (e) {
+    fatalError.value = errMsg(e)
+  }
+}
+
+/**
+ * 重命名会话：成功后只覆盖本地那一条，不重拉列表（重拉会把正在看的会话滚动位置之类的状态搅动）。
+ * 失败走全局横幅：改名失败不该打断用户正在看的对话。
+ */
+async function onRenameConversation(id: number, title: string): Promise<void> {
+  const target = conversations.value.find((c) => c.id === id)
+  if (!target || target.title === title) {
+    return
+  }
+  try {
+    const updated = await renameConversation(id, title)
+    target.title = updated.title
+    fatalError.value = ''
   } catch (e) {
     fatalError.value = errMsg(e)
   }
@@ -210,25 +360,8 @@ async function send(): Promise<void> {
     await streamChat(
       conversationId,
       text,
-      thinkingOn.value,
-      {
-        onReasoning: (t) => {
-          reply.reasoning = (reply.reasoning ?? '') + t
-          scrollToBottom()
-        },
-        onDelta: (t) => {
-          reply.content += t
-          scrollToBottom()
-        },
-        onDone: (messageId) => {
-          if (messageId !== undefined) {
-            reply.id = messageId
-          }
-        },
-        onError: (message) => {
-          reply.error = message
-        },
-      },
+      streamOptions(),
+      streamHandlers(reply),
       abortController.signal,
     )
   } catch (e) {
@@ -247,6 +380,73 @@ async function send(): Promise<void> {
   }
 }
 
+/** 流式回调：思考追加到 reasoning、回答追加到 content、done 回填 id、error 写错误文案。send 与 regenerate 共用。 */
+function streamHandlers(reply: UiMessage): StreamHandlers {
+  return {
+    onReasoning: (t) => {
+      reply.reasoning = (reply.reasoning ?? '') + t
+      scrollToBottom()
+    },
+    onDelta: (t) => {
+      reply.content += t
+      scrollToBottom()
+    },
+    onDone: (messageId, usage) => {
+      if (messageId !== undefined) {
+        reply.id = messageId
+      }
+      // 用量行当场回填：不这么做的话要等刷新页面才能看到这条回答烧了多少
+      if (usage) {
+        reply.model = usage.model
+        reply.promptTokens = usage.prompt_tokens
+        reply.completionTokens = usage.completion_tokens
+        reply.reasoningTokens = usage.reasoning_tokens
+      }
+    },
+    onError: (message) => {
+      reply.error = message
+    },
+  }
+}
+
+/**
+ * 重新生成：本地先摘掉最后一条助手消息，再以流式占位接上新回答。
+ * 后端会删掉库里的旧回答、用同一条用户消息重跑，所以历史不会攒出两份回答。
+ */
+async function regenerate(): Promise<void> {
+  const id = activeId.value
+  if (id === null || streaming.value) {
+    return
+  }
+  const last = messages.value[messages.value.length - 1]
+  if (!last || last.role !== 'assistant') {
+    return
+  }
+  messages.value.pop()
+  messages.value.push({ id: null, role: 'assistant', content: '', reasoning: '', streaming: true })
+  // 从数组里取回响应式代理再改，理由同 send()
+  const reply = messages.value[messages.value.length - 1]!
+  scrollToBottom()
+
+  streaming.value = true
+  abortController = new AbortController()
+  try {
+    await streamRegenerate(id, streamOptions(), streamHandlers(reply), abortController.signal)
+  } catch (e) {
+    if (e instanceof Error && e.name === 'AbortError') {
+      // 与 send() 同语义：中断时后端已保留已生成部分
+    } else {
+      reply.error = errMsg(e)
+    }
+  } finally {
+    reply.streaming = false
+    streaming.value = false
+    abortController = null
+    scrollToBottom()
+    void loadConversations()
+  }
+}
+
 /** Enter 发送、Shift+Enter 换行；中文输入法候选态的 Enter 不触发发送。 */
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
@@ -256,6 +456,7 @@ function onKeydown(e: KeyboardEvent): void {
 }
 
 onMounted(async () => {
+  void loadLlmOptions()
   await loadConversations()
   const first = conversations.value[0]
   if (first) {
@@ -281,6 +482,7 @@ onBeforeUnmount(stopStreaming)
       @select="selectConversation"
       @create="newConversation"
       @remove="removeConversation"
+      @rename="onRenameConversation"
     />
 
     <main class="chat">
@@ -302,7 +504,26 @@ onBeforeUnmount(stopStreaming)
       <div ref="scroller" class="messages">
         <div v-if="loadingMessages" class="hint">消息加载中…</div>
         <div v-else-if="messages.length === 0" class="hint">发送第一条消息，开始对话</div>
-        <MessageBubble v-for="(m, i) in messages" :key="m.id ?? 'pending-' + i" :message="m" />
+        <template v-else>
+          <div v-if="hasMoreOlder" class="older">
+            <button
+              class="link-btn"
+              type="button"
+              :disabled="loadingOlder || streaming"
+              :title="loadingOlder ? '正在加载' : '再往前翻 50 条'"
+              @click="loadOlder"
+            >
+              {{ loadingOlder ? '加载更早的消息…' : '加载更早的消息' }}
+            </button>
+          </div>
+          <MessageBubble
+            v-for="(m, i) in messages"
+            :key="m.id ?? 'pending-' + i"
+            :message="m"
+            :can-regenerate="m.role === 'assistant' && i === messages.length - 1 && !streaming"
+            @regenerate="regenerate"
+          />
+        </template>
       </div>
 
       <footer class="input-bar">
@@ -310,6 +531,22 @@ onBeforeUnmount(stopStreaming)
           <input v-model="thinkingOn" type="checkbox" :disabled="streaming" />
           思考模式
         </label>
+        <select
+          v-model="selectedModel"
+          class="bar-select"
+          :disabled="streaming || llmModels.length === 0"
+          title="本轮使用的模型"
+        >
+          <option v-for="m in llmModels" :key="m" :value="m">{{ m }}</option>
+        </select>
+        <select
+          v-model="thinkingBudgetSel"
+          class="bar-select"
+          :disabled="streaming || !thinkingOn"
+          title="思考预算：思维链 token 上限。思考模式关闭时不可选"
+        >
+          <option v-for="c in THINKING_BUDGET_CHOICES" :key="c.value" :value="c.value">{{ c.label }}</option>
+        </select>
         <div class="input-row">
           <textarea
             v-model="input"
@@ -435,6 +672,16 @@ onBeforeUnmount(stopStreaming)
   gap: 16px;
 }
 
+.older {
+  align-self: center;
+}
+
+/* .messages 是 flex column，不写 align-self 按钮会被拉成一整行宽 */
+.older .link-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .hint {
   margin: auto;
   color: var(--text-muted);
@@ -445,6 +692,20 @@ onBeforeUnmount(stopStreaming)
   padding: 10px 24px 16px;
   background: var(--panel);
   border-top: 1px solid var(--border);
+}
+
+.bar-select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.bar-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .thinking-toggle {
