@@ -20,9 +20,13 @@ public class MockLlmClient implements LlmClient {
     @Override
     public void streamChat(List<LlmMessage> messages, LlmCallOptions options, LlmStreamListener listener) {
         String lastUser = "";
+        String systemPrompt = null;
         for (int i = messages.size() - 1; i >= 0; i--) {
-            if ("user".equals(messages.get(i).role())) {
+            if ("user".equals(messages.get(i).role()) && lastUser.isEmpty()) {
                 lastUser = messages.get(i).content();
+            }
+            if ("system".equals(messages.get(i).role())) {
+                systemPrompt = messages.get(i).content();
                 break;
             }
         }
@@ -34,7 +38,12 @@ public class MockLlmClient implements LlmClient {
             emit(listener::onReasoning, reasoningText);
         }
 
-        String reply = "【Mock 回复】收到你的消息：「" + lastUser + "」。\n"
+        // 把收到的人设回显一行：没有真实 key 时也能肉眼确认 system prompt 真的进了模型输入
+        String persona = (systemPrompt == null || systemPrompt.isBlank())
+                ? ""
+                : "【Mock 人设】" + systemPrompt.substring(0, Math.min(30, systemPrompt.length())) + "\n";
+        String reply = persona
+                + "【Mock 回复】收到你的消息：「" + lastUser + "」。\n"
                 + "这是本地 Mock 的流式回复。\n"
                 + "在 application.properties 里填写 llm.api-key（百炼 API Key）后，就会切换到真实模型。";
         emit(listener::onToken, reply);

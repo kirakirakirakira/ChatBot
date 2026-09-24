@@ -5,6 +5,7 @@ import com.chatbot.chatbot.auth.TokenService;
 import com.chatbot.chatbot.dto.ChangePasswordRequest;
 import com.chatbot.chatbot.dto.LoginRequest;
 import com.chatbot.chatbot.dto.LoginResponse;
+import com.chatbot.chatbot.dto.UpdateSystemPromptRequest;
 import com.chatbot.chatbot.dto.UserVO;
 import com.chatbot.chatbot.entity.User;
 import com.chatbot.chatbot.repository.UserRepository;
@@ -54,11 +55,24 @@ public class UserService {
         return UserVO.from(requireUser(currentUser.id()));
     }
 
-    /** 全部用户。权限由 UserController 上的 @RequireAdmin 保证，这里不重复判断。 */
+    /** 全部用户。权限由 UserController 上的 @RequireAdmin 保证，这里不重复判断；systemPrompt 一律不带出。 */
     public List<UserVO> list() {
         return userRepository.findAllByOrderByIdAsc().stream()
-                .map(UserVO::from)
+                .map(u -> UserVO.from(u, false))
                 .toList();
+    }
+
+    /**
+     * 改自己的系统提示词：目标用户 id 只来自 token，和改密码同一个口径。
+     * 全空白视为清除（存 NULL），前端「清空」按钮不用单独走一个接口。
+     */
+    @Transactional
+    public UserVO updateSystemPrompt(CurrentUser currentUser, UpdateSystemPromptRequest request) {
+        User user = requireUser(currentUser.id());
+        String prompt = (request.systemPrompt() == null) ? null : request.systemPrompt().strip();
+        user.setSystemPrompt((prompt == null || prompt.isEmpty()) ? null : prompt);
+        userRepository.save(user);
+        return UserVO.from(user);
     }
 
     /**

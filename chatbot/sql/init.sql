@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `role`                int          NOT NULL,
   `created_at`          datetime(6)  NOT NULL,
   `password_changed_at` datetime(6)  DEFAULT NULL,
+  `system_prompt`     text         DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_sys_user_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -91,6 +92,10 @@ VALUES ('admin', '$2a$10$lN0TQaxdLsYVpQ9wDx5OB.cucn20byv6DYaSmL32FvvtzDZWlEpmi',
 --
 -- ===== 已有库升级：2026-09-24「用量统计 + 模型记录」 =====
 -- 四个可空列，旧消息保持 NULL（不填 0 冒充真实值），不需要清数据：
+-- ===== 已有库升级：2026-09-24「每用户系统提示词」 =====
+-- 可空列，没设过的用户保持 NULL（= 不下发 system 消息），不需要清数据：
+--   ALTER TABLE `sys_user` ADD COLUMN `system_prompt` text NULL AFTER `password_changed_at`;
+--
 --   ALTER TABLE `message`
 --     ADD COLUMN `model` varchar(64) DEFAULT NULL AFTER `reasoning`,
 --     ADD COLUMN `prompt_tokens` int DEFAULT NULL AFTER `model`,

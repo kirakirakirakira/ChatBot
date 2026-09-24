@@ -49,6 +49,14 @@ public class User {
     @Column(name = "password_changed_at")
     private LocalDateTime passwordChangedAt;
 
+    /**
+     * 该用户的系统提示词：每轮对话作为 system 消息放在历史最前面。
+     * 挂在用户上而不是会话上：同一个人不管开几个会话，人设保持一致；换账号就是另一套人设。
+     * NULL = 没设，后端不下发 system 消息。
+     */
+    @Column(name = "system_prompt", columnDefinition = "TEXT")
+    private String systemPrompt;
+
     @PrePersist
     void onCreate() {
         this.createdAt = LocalDateTime.now();
@@ -92,5 +100,13 @@ public class User {
 
     public void setPasswordChangedAt(LocalDateTime passwordChangedAt) {
         this.passwordChangedAt = passwordChangedAt;
+    }
+
+    public String getSystemPrompt() {
+        return systemPrompt;
+    }
+
+    public void setSystemPrompt(String systemPrompt) {
+        this.systemPrompt = systemPrompt;
     }
 }

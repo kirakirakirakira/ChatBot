@@ -103,7 +103,7 @@ public class ChatService {
         saveMessage(conversation, Role.USER, request.message(), null);
 
         LlmCallOptions options = buildOptions(request.enableThinking(), request.model(), null, request.thinkingBudget());
-        return startStream(conversation, recentHistory(conversation.getId()), options);
+        return startStream(conversation, recentHistory(conversation.getId(), user.systemPrompt()), options);
     }
 
     /**
@@ -124,7 +124,7 @@ public class ChatService {
                 requestedModel,
                 null,
                 (request == null) ? null : request.thinkingBudget());
-        return startStream(conversation, recentHistory(conversation.getId()), options);
+        return startStream(conversation, recentHistory(conversation.getId(), user.systemPrompt()), options);
     }
 
     /**
@@ -332,7 +332,11 @@ public class ChatService {
      * <p>
      * {@code limit <= 0} 仍然全量查——配置里写明了「<=0 表示不限制」，不能悄悄换成默认值。
      */
-    private List<LlmMessage> recentHistory(Long conversationId) {
+    /**
+     * 取最近 N 条历史拼成模型输入；用户设了系统提示词时，把它作为 system 消息放在最前面。
+     * system 消息**不占** max-history-messages 的名额：它是人设不是对话，截历史不该把它截掉。
+     */
+    private List<LlmMessage> recentHistory(Long conversationId, String systemPrompt) {
         int limit = llmProperties.maxHistoryMessages();
         List<Message> window;
         if (limit > 0) {
@@ -345,9 +349,13 @@ public class ChatService {
         }
         // 助手消息把存库的思考一起回传：qwen3.8 系 preserve_thinking 默认 true，
         // 缺了 reasoning_content 虽不报错，但多轮推理质量会打折（官方 Chat 文档）
-        return window.stream()
+        List<LlmMessage> messages = new ArrayList<>(window.stream()
                 .map(m -> new LlmMessage(m.getRole().name().toLowerCase(), m.getContent(), m.getReasoning()))
-                .toList();
+                .toList());
+        if (systemPrompt != null && !systemPrompt.isBlank()) {
+            messages.add(0, LlmMessage.of("system", systemPrompt.strip()));
+        }
+        return messages;
     }
 
     /**

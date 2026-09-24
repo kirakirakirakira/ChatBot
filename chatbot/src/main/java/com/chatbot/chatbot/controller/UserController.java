@@ -4,6 +4,7 @@ import com.chatbot.chatbot.auth.CurrentUser;
 import com.chatbot.chatbot.auth.RequireAdmin;
 import com.chatbot.chatbot.dto.ChangePasswordRequest;
 import com.chatbot.chatbot.dto.LoginResponse;
+import com.chatbot.chatbot.dto.UpdateSystemPromptRequest;
 import com.chatbot.chatbot.dto.UserVO;
 import com.chatbot.chatbot.service.UserService;
 import jakarta.validation.Valid;
@@ -35,7 +36,17 @@ public class UserController {
         return userService.changePassword(currentUser, request);
     }
 
-    /** 用户列表，仅管理员；普通用户拿 403。 */
+    /**
+     * 改自己的系统提示词，返回更新后的用户信息，前端直接覆盖本地登录态里的 currentUser。
+     * 不换发 token：改人设不作废登录态，和改密码的语义刻意不同。
+     */
+    @PutMapping("/me/system-prompt")
+    public UserVO updateSystemPrompt(CurrentUser currentUser,
+                                     @Valid @RequestBody UpdateSystemPromptRequest request) {
+        return userService.updateSystemPrompt(currentUser, request);
+    }
+
+    /** 用户列表，仅管理员；普通用户拿 403。列表里不带任何人的 systemPrompt。 */
     @GetMapping
     @RequireAdmin
     public List<UserVO> list() {

@@ -3,10 +3,11 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ConversationSidebar from '@/components/ConversationSidebar.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
+import SystemPromptDialog from '@/components/SystemPromptDialog.vue'
 import UserListDialog from '@/components/UserListDialog.vue'
-import type { LoginResult, UiMessage } from '@/types'
+import type { CurrentUser, LoginResult, UiMessage } from '@/types'
 import type { StreamHandlers, StreamOptions } from '@/api'
-import { clearSession, currentUser, isAdmin, setSession } from '@/auth'
+import { clearSession, currentUser, isAdmin, setSession, token } from '@/auth'
 import {
   createConversation,
   deleteConversation,
@@ -54,6 +55,8 @@ watch(thinkingBudgetSel, (v) => localStorage.setItem('chatbot.thinkingBudget', v
 /** 会话列表加载失败、删除失败这类全局错误，横幅展示。 */
 const fatalError = ref('')
 const showPasswordDialog = ref(false)
+/** 系统提示词（人设）弹窗：所有用户可见，改的是自己那份。 */
+const showPromptDialog = ref(false)
 /** 用户管理弹窗：只有管理员看得到入口，普通用户点了也会被后端 403 挡住。 */
 const showUserDialog = ref(false)
 
@@ -95,6 +98,14 @@ function logout(): void {
 /** 改密码成功后换上后端换发的新 token，否则下一个请求就会 401 被踢回登录页。 */
 function onPasswordChanged(result: LoginResult): void {
   setSession(result.token, result.user)
+}
+
+/** 保存人设后只更新本地用户信息：token 不变、不用重新登录，下一条消息就带上新人设。 */
+function onPromptChanged(user: CurrentUser): void {
+  // token 在这里必然非空（没登录根本看不到顶栏），但用 if 收窄比 ! 断言更诚实
+  if (token.value) {
+    setSession(token.value, user)
+  }
 }
 
 /**
@@ -490,6 +501,7 @@ onBeforeUnmount(stopStreaming)
         <span class="topbar-title">Chatbot</span>
         <div class="topbar-right">
           <button v-if="isAdmin" class="link-btn" type="button" @click="showUserDialog = true">用户管理</button>
+          <button class="link-btn" type="button" @click="showPromptDialog = true">系统提示词</button>
           <button class="link-btn" type="button" @click="showPasswordDialog = true">修改密码</button>
           <span class="user-chip">
             <span class="user-name">{{ currentUser?.username }}</span>
@@ -567,6 +579,12 @@ onBeforeUnmount(stopStreaming)
       @changed="onPasswordChanged"
     />
     <UserListDialog v-if="showUserDialog" @close="showUserDialog = false" />
+    <SystemPromptDialog
+      v-if="showPromptDialog"
+      :initial="currentUser?.systemPrompt ?? ''"
+      @close="showPromptDialog = false"
+      @changed="onPromptChanged"
+    />
   </div>
 </template>
 

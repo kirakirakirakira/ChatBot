@@ -82,6 +82,8 @@ export interface CurrentUser {
   role: number
   /** 后端给的中文角色名，直接展示，前端不用再维护一份映射。 */
   roleLabel: string
+  /** 该用户的系统提示词（人设）；没设过为 null。管理员的用户列表里恒为 null。 */
+  systemPrompt?: string | null
   createdAt: string
 }
 

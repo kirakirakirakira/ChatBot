@@ -110,7 +110,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 │       │   ├── auth/           # 7 个文件：token 签发校验 + 拦截器 + 当前用户注入 + 角色
 │       │   ├── config/         # 6 个文件：Web/CORS、BCrypt、LLM Bean、种子管理员、全局异常
 │       │   ├── controller/     # 5 个文件：Auth / Conversation / Chat / User / Llm
-│       │   ├── dto/            # 13 个文件：请求体、响应 VO、SSE 事件、统一错误体
+│       │   ├── dto/            # 14 个文件：请求体、响应 VO、SSE 事件、统一错误体
 │       │   ├── entity/         # 4 个文件：User / Conversation / Message / Role
 │       │   ├── llm/            # 7 个文件：客户端抽象 + OpenAI 兼容实现 + Mock + 配置 + 调用选项
 │       │   ├── repository/     # 3 个文件：Spring Data JPA 接口
@@ -135,7 +135,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
         ├── assets/main.css     # 全局 CSS 变量 + 登录/弹窗共用件
         ├── lib/                # markdown.ts：markdown-it + highlight.js + DOMPurify
         ├── views/              # LoginView.vue、ChatView.vue
-        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、ChangePasswordDialog、UserListDialog
+        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、ChangePasswordDialog、SystemPromptDialog、UserListDialog
 ```
 
 ### 2.2 后端逐文件清单
@@ -179,7 +179,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `ConversationController.java` | `/api/conversations` | `POST`（→ 201 + `ConversationVO`）、`GET`（→ `List<ConversationVO>`）、`GET /{id}/messages?before=&limit=`（→ `MessagePageVO`）、`PUT /{id}/title`（→ `ConversationVO`）、`DELETE /{id}`（→ 204）。`ChatController` 另有 `POST /{id}/regenerate`（SSE，请求体可省略） |**每个方法都声明 `CurrentUser` 形参**，归属校验在 service 层 |
 | `ChatController.java` | `/api/conversations` | `POST /{id}/chat`，`produces = TEXT_EVENT_STREAM_VALUE`，`@Valid ChatRequest` + `CurrentUser` → `SseEmitter`。**CurrentUser 必须在进 service 之前解析**：生成跑在虚拟线程上，那里拿不到 request attribute，补不了归属校验 |
 | `LlmController.java` | `/api/llm` | `GET /options`（→ `LlmOptionsVO`）。默认受保护：模型清单不敏感，但没必要在未登录时暴露部署用了哪些模型 |
-| `UserController.java` | `/api/users` | `PUT /me/password`（→ 新的 `LoginResponse`）、`GET`（`@RequireAdmin` → `List<UserVO>`）。路径里的 `me` 就是「只能是自己」，**不接受 userId 参数**。 |
+| `UserController.java` | `/api/users` | `PUT /me/password`（→ 新的 `LoginResponse`）、`PUT /me/system-prompt`（→ `UserVO`，**不换发 token**：改人设不作废登录态）、`GET`（`@RequireAdmin` → `List<UserVO>`，不含 systemPrompt）。路径里的 `me` 就是「只能是自己」，**不接受 userId 参数**。 |
 
 > 注意：`ConversationController` 和 `ChatController` **都没有 `CurrentUser` 形参**，会话操作不做归属校验——这是第十三节记录的限制，不是遗漏阅读。
 
@@ -196,6 +196,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `ConversationVO.java` | `(id, title, createdAt, updatedAt)` |
 | `MessageVO.java` | `(id, role小写字符串, content, reasoning, model, promptTokens, completionTokens, reasoningTokens, createdAt)`。record 上 `@JsonInclude(NON_NULL)`：没有的字段（没思考 / 没用量 / 用户消息）干脆不下发 |
 | `RenameConversationRequest.java` | `(title)`，`@NotBlank` + `@Size(max=100)`（100 是 `conversation.title` 列宽） |
+| `UpdateSystemPromptRequest.java` | `(systemPrompt)`，`@Size(max=2000)`；全空白 = 清除人设 |
 | `RegenerateRequest.java` | `(enableThinking, model, thinkingBudget)`，整个体可省略；model 不传时沿用被删回答的模型 |
 | `LlmOptionsVO.java` | `(models, defaultModel)`：界面模型选择器的数据源，来自 `llm.available-models` |
 | `RegenerateRequest.java` | `(enableThinking)`，整个体可省略（`@RequestBody(required = false)`）；语义与 `ChatRequest.enableThinking` 一致 |
@@ -206,7 +207,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 
 | 文件 | 表 | 要点 |
 |---|---|---|
-| `User.java` | `sys_user` | 表名用 `sys_user` 而不是 `user`：MySQL 里 `user` 既是关键字又是函数名，处处要加反引号。字段 `id`(IDENTITY)、`username`(非空,50,唯一约束 `uk_sys_user_username`)、`password`(非空,100；BCrypt 固定 60 字符，留余量给以后换算法)、`role`(Integer 非空)、`createdAt`(`@PrePersist` 写入,`updatable=false`)、`passwordChangedAt`(可空)。 |
+| `User.java` | `sys_user` | 表名用 `sys_user` 而不是 `user`（MySQL 关键字）。字段 `id`、`username`(唯一)、`password`(BCrypt)、`role`、`createdAt`、`passwordChangedAt`(可空)、`systemPrompt`(可空 TEXT：该用户的人设，每轮作为 system 消息放在历史最前面) |
 | `Conversation.java` | `conversation` | `id`、`owner`（`@ManyToOne` LAZY 非空，`@JoinColumn(name="owner_id")`，外键名 `fk_conversation_owner`）、`title`(非空,100)、`createdAt`、`updatedAt`。表上 `@Index idx_conversation_owner_updated(owner_id, updated_at)` 服务「按用户查列表 + updated_at 倒序」这一条查询。取单个会话只走 `ConversationRepository.findByIdAndOwnerId`，**直接用 findById 就是越权** |
 | `Message.java` | `message` | `id`、`conversation`(`@ManyToOne` LAZY, 非空)、`role`(`@Enumerated(STRING)`, 长度16)、`content`(LONGTEXT)、`reasoning`(可空 LONGTEXT，思考全文)、`model`(varchar 64，回答用的模型)、`promptTokens` / `completionTokens` / `reasoningTokens`(可空 int，用量；拿不到就 NULL，不填 0 冒充真实值)、`createdAt` |
 | `Role.java` | — | 枚举 `USER`、`ASSISTANT`。**加新值（如 SYSTEM）时已存在的库不会自动变更列类型**，需手工 `ALTER TABLE message MODIFY role enum(...)`（`init.sql` 末尾有备注）。 |
@@ -237,7 +238,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 |---|---|
 | `ChatService.java` | **全项目最复杂的类**，SSE 流式对话编排。详见第八节 8.1。关键成员：`SSE_TIMEOUT_MARGIN_MS = 30_000`、`DEFAULT_TITLE = "新的对话"`、`TITLE_MAX_LENGTH = 30`、`MAX_THINKING_BUDGET = 262144`（qwen3.8 系最大思维链长度）、`executor = Executors.newVirtualThreadPerTaskExecutor()`、`sseTimeoutMs = requestTimeoutSeconds*1000 + 30000`。`buildOptions()` 统一做模型白名单 + 思考预算校验（思考关着时预算丢弃）；`recentHistory()` 把存库思考随历史回传（preserve_thinking）。内部类 `SurrogateBuffer`、`StreamAbortedException` |
 | `ConversationService.java` | 会话 CRUD，**每个公开方法都接 `CurrentUser`**：`create(user)`、`list(user)`、`messages(id, user, before, limit)`（游标分页）、`delete(id, user)`、`requireOwned(id, user)`（404 口径）、`rename(id, user, request)`、`dropLastAssistantMessage(id)`（重新生成前置，返回嵌套 record `DroppedReply(prompt, model)`；最后一条不是助手消息就 400） |
-| `UserService.java` | `login()`、`me()`、`list()`、`changePassword()`。构造时用 `passwordEncoder.encode(UUID.randomUUID())` 预算一个 `dummyHash`：用户名不存在时也拿它做一次 BCrypt 比对，**防时序攻击**（BCrypt 故意做慢，直接返回会让攻击者靠响应快慢筛出存在的用户名）。「用户不存在」与「密码错」返回同一句 401 文案，不给用户名枚举留口子。 |
+| `UserService.java` | `login()`、`me()`、`list()`（**不带任何人的 systemPrompt**）、`changePassword()`、`updateSystemPrompt()`（目标 id 只来自 token；全空白存 NULL）。构造时用 `passwordEncoder.encode(UUID.randomUUID())` 预算一个 `dummyHash`：用户名不存在时也拿它做一次 BCrypt 比对，**防时序攻击**（BCrypt 故意做慢，直接返回会让攻击者靠响应快慢筛出存在的用户名）。「用户不存在」与「密码错」返回同一句 401 文案，不给用户名枚举留口子。 |
 
 **resources / sql / test**
 
@@ -345,7 +346,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `main.ts` | 5 | `import './assets/main.css'` + `createApp(App).mount('#app')`。没有注册任何插件。 |
 | `App.vue` | 小 | **根组件 = 权限闸门**。`restoring` ref 初值 = 「本地是否有 token」；`onMounted` 里若有 token 就调 `fetchMe()` 验证并 `setSession()` 刷新用户信息（角色可能变了），失败则 `clearSession()`。模板三分支：`restoring` → 「正在恢复登录状态…」；`isAuthenticated` → `<ChatView/>`；否则 → `<LoginView/>`。**没有 router，页面切换就是这里换组件。** |
 | `auth.ts` | 小 | 登录态。导出 `ROLE_USER=0`/`ROLE_ADMIN=1`（与后端 `Roles` 对齐）、`token`/`currentUser`（模块级 `ref`，初值读 `localStorage` 的 `chatbot.token`/`chatbot.user`）、`isAuthenticated`/`isAdmin`（`computed`）、`setSession(token,user)`、`clearSession()`。`readStoredUser()` 对 JSON 解析失败返回 null（存坏了就当没登录）。**本文件不要 import api.ts**，否则和 `api.ts → auth.ts` 形成循环依赖。 |
-| `api.ts` | 中 | 所有后端调用。`BASE = '/api'`。内部 `request<T>(path, init)`：`withAuth()` 挂 `Authorization: Bearer`、非 2xx 时 `extractErrorMessage()` 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（App.vue 随即弹回登录页）、204 返回 `undefined`。导出：`login`、`fetchMe`、`changePassword`、`listUsers`、`createConversation`、`listConversations`、`getMessages`（带 `{before, limit}` 分页参数，返回 `MessagePage`）、`deleteConversation`、`renameConversation`、`fetchLlmOptions`、`streamChat` / `streamRegenerate`（**共用 `consumeSse()` 解析 SSE、`pickStreamOptions()` 拼请求体**，不存在第二份 SSE 契约）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
+| `api.ts` | 中 | 所有后端调用。`BASE = '/api'`。内部 `request<T>(path, init)`：`withAuth()` 挂 `Authorization: Bearer`、非 2xx 时 `extractErrorMessage()` 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（App.vue 随即弹回登录页）、204 返回 `undefined`。导出：`login`、`fetchMe`、`changePassword`、`listUsers`、`createConversation`、`listConversations`、`getMessages`（带 `{before, limit}` 分页参数，返回 `MessagePage`）、`deleteConversation`、`renameConversation`、`updateSystemPrompt`、`fetchLlmOptions`、`streamChat` / `streamRegenerate`（**共用 `consumeSse()` 解析 SSE、`pickStreamOptions()` 拼请求体**，不存在第二份 SSE 契约）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
 | `types.ts` | 小 | 与后端一一对应：`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`（含 `model` / 三个 token 计数）、`CurrentUser`↔`UserVO`、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`（`done` 事件带用量）、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`；另有**纯前端**的 `UiMessage`（比 `Message` 多 `id: number\|null`、`reasoning?`、`error?`、`streaming?`、`model?`、用量三字段） |
 | `assets/main.css` | 中 | 全局：① `:root` CSS 变量（`--bg`/`--panel`/`--border`/`--text`/`--text-muted`/`--accent`(#10a37f)/`--danger`/`--user-bubble`），`@media (prefers-color-scheme: dark)` 里整套暗色覆盖；② reset（`box-sizing`、`html/body/#app` 高度 100%）；③ **登录页与两个弹窗共用的基础件**：`.field`/`.field-label`/`.field-input`、`.btn-primary`/`.btn-ghost`、`.alert-error`/`.alert-ok`、`.modal-mask`/`.modal-card`(`.wide`)/`.modal-title`/`.modal-actions`。放全局而非 scoped 是因为三处样式完全一样，只写一份。 |
 | `lib/markdown.ts` | 小 | markdown-it 实例 + 自定义 fence 渲染器（代码块包 `.code-block`、加语言标签和复制按钮）+ `renderMarkdown()`（渲染后过 DOMPurify）。**安全两道锁**：`html:false` 转义输入里的原始 HTML，DOMPurify 再兜一道；`breaks:true` 让单换行也换行。高亮只注册 highlight.js common 子集，认不出的语言原样输出不报错 |
@@ -354,6 +355,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `components/ConversationSidebar.vue` | 中 | 纯展示组件。props `conversations`/`activeId`/`canCreate`；emits `select(id)`/`create()`/`remove(id)`/`rename(id, title)`。**双击标题行内改名**：Enter / 失焦提交、Esc 取消、空标题静默取消；输入框上 `@click.stop` 免得点输入框把整行的 select 也触发掉。`formatTime()`：今天显示 `HH:mm`，更早显示 `MM-DD`。删除按钮 hover 才可见，`@click.stop` 防止冒泡触发 select。 |
 | `components/MessageBubble.vue` | 小 | 单条消息气泡。prop `message: UiMessage`。① 思考过程用原生 `<details>`/`<summary>` 折叠，`:open="message.streaming \|\| undefined"`（**绑 `undefined` 而不是 `false`**：`open="false"` 这个属性只要存在就生效），summary 文案在「思考中…」/「思考过程」间切换；② **助手消息正文交给 `MarkdownContent` 渲染，用户消息刻意保持纯文本**（用户输入的是「话」不是文档）；③ `message.error` 用 `⚠` 前缀红字展示；④ 最后一条助手消息且不在生成中时显示弱化的「重新生成」文字按钮（prop `canRegenerate`、emit `regenerate`），刻意不做成显眼按钮：低频操作不该和正文抢注意力；⑤ 助手气泡底部的 `.meta` 用量行：`模型 · 输入 x / 输出 y tokens（含思考 z）`，思考 token 单列是因为「思考 2.4 万字、回答 1 个字」这种成本事故必须一眼看得见 |
 | `components/ChangePasswordDialog.vue` | 中 | 改密码弹窗，所有人可见。前端先拦一道（新密码 6~64、两次一致），真正校验以后端为准。成功后 `emit('changed', result)` 把新 `LoginResult` 交回父组件（**必须换上新 token，否则下一个请求就 401**），显示成功提示并 1.2 秒后自动关闭；`closeTimer` 在 `onBeforeUnmount` 里清掉。Esc 关闭、点遮罩关闭。 |
+| `components/SystemPromptDialog.vue` | 中 | 系统提示词（人设）弹窗，所有人可见。打开时用本地登录态里的 `currentUser.systemPrompt` 回显（不为回显再请求一次 /me）；保存调 `PUT /users/me/system-prompt`，成功后 `emit('changed', user)` 让父组件 `setSession(token, user)` 覆盖本地用户信息——**不用重新登录**。清空保存 = 移除人设 |
 | `components/MarkdownContent.vue` | 小 | Markdown 渲染容器：`v-html` 挂 `renderMarkdown()` 的结果；**复制按钮是渲染产物、不在 Vue 事件体系里**，靠容器上的委托监听 + `closest('.copy-btn')` 处理，剪贴板写失败会显示「复制失败」而不是假装成功；`streaming` 为 true 时用 CSS `::after` 在最后一个块末尾挂闪烁光标 |
 | `components/UserListDialog.vue` | 中 | 用户管理弹窗，仅 `isAdmin` 时 ChatView 才渲染入口。`onMounted` 调 `listUsers()`，表格列 ID/用户名/角色/创建时间，角色用 `.role-tag`（管理员高亮）+ 灰色 `role=N`。403（普通用户误入）和 401（登录态失效）都落到 `error` 展示。Esc / 点遮罩关闭。 |
 
@@ -376,6 +378,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `PAGE_SIZE` | 常量 50，与后端 `ConversationService.DEFAULT_PAGE_SIZE` 一致（后端上限 200） |
 | `fatalError` | 全局错误横幅（列表加载失败、删除失败等） |
 | `showPasswordDialog` / `showUserDialog` | 两个弹窗开关 |
+| `showPromptDialog` | 系统提示词弹窗开关 |
 | `activeIsEmpty` | 当前会话是否「一条消息都没有」。**只在历史加载成功后才更新**，加载中/失败保持 false，否则会把「还没读出来」的会话误判成空会话删掉 |
 | `abortController` | 当前 SSE 的 `AbortController`（模块级 `let`，非 ref） |
 | `scroller` | 消息区 DOM ref，`scrollToBottom()` 用 |
@@ -393,6 +396,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | 往前翻历史 | `loadOlder()`：拿 `olderCursor` 调 `getMessages(id, {before, limit})`，把返回的 `items` 接到列表**头部**；插入前记下 `scrollHeight` / `scrollTop`，插入后把高度差补回 `scrollTop`；等待期间 `activeId` 变了就把这一页丢掉 | 不补滚动位置的话，往顶部插 50 条会把视口顶下去，用户正在读的那条消息直接跑掉。生成期间禁用：流式增量在往底部追加，补偿会算歪 |
 | 流式回调 | `onReasoning` 追加到 `reply.reasoning`、`onDelta` 追加到 `reply.content`、`onDone` 回填 `reply.id` **并当场回填 model / 用量**、`onError` 写 `reply.error`；每次都 `scrollToBottom()`。send 与 regenerate 共用 `streamHandlers(reply)` | — |
 | 模型与思考强度 | 输入条两个 `<select>`：模型（`llm.available-models`）+ 思考强度（4096 / 16384 / 131072，对齐百炼 reasoning_effort 的 low / medium 映射，131072 同时是 qwen3.6-flash 的思维链上限）。选择随每条消息下发，存 localStorage | 档位不放进 262144（xhigh）：只有 qwen3.8 系吃得下，qwen3.6-flash 会 400 |
+| 人设 | 顶栏「系统提示词」→ 弹窗编辑 → 保存后覆盖本地 `currentUser`，**下一条消息立即生效**（后端每轮把 `CurrentUser.systemPrompt` 拼成 system 消息） | 人设挂在用户上而不是会话上：同一个人所有会话共用一套人设，换账号就是另一套 |
 | 收尾 | `finally` 里 `reply.streaming = false`、`streaming = false`、`abortController = null`、`scrollToBottom()`、`void loadConversations()` | 首条消息会触发后端自动起标题，刷新列表才能拿到新标题和新排序 |
 | 停止生成 | `stopStreaming()` = `abortController.abort()`，**不调任何后端接口**。`AbortError` 在 catch 里静默处理 | 后端检测连接断开就停止调模型并把已生成部分入库 |
 | 键盘 | `onKeydown()`：Enter 发送、Shift+Enter 换行、**`e.isComposing` 时不发送** | 中文输入法候选态的 Enter 不该触发发送 |
@@ -514,6 +518,7 @@ App.vue  （权限闸门：restoring / isAuthenticated）
 | `role` | `int` | NOT NULL | `0`=普通用户，`1`=管理员。常量在 `auth/Roles.java` |
 | `created_at` | `datetime(6)` | NOT NULL | `@PrePersist` 写入，`updatable=false` |
 | `password_changed_at` | `datetime(6)` | NULL | 从没改过密码为 NULL。签发时间（token `iat`）早于它的登录态一律作废 → **改密码会踢掉其他所有设备的会话**。**这列必须保持 `datetime(6)`**：后端按毫秒比较，精度掉到秒会让改密码那一秒签发的旧 token 躲过失效判断 |
+| `system_prompt` | `text` | NULL | 该用户的系统提示词（人设）；NULL = 没设，后端不下发 system 消息。2026-09-24 加入 |
 
 **`conversation`（会话）** — 实体 `entity/Conversation.java`
 
@@ -559,7 +564,7 @@ App.vue  （权限闸门：restoring / isAuthenticated）
 
 ## 七、API 接口汇总
 
-### 7.1 全量接口表（共 12 个）
+### 7.1 全量接口表（共 13 个）
 
 | # | 方法 | 路径 | 鉴权 | 成功状态码 | 请求体 | 响应体 | 后端入口 |
 |---|---|---|---|---|---|---|---|
@@ -572,9 +577,10 @@ App.vue  （权限闸门：restoring / isAuthenticated）
 | 7 | POST | `/api/conversations/{id}/chat` | 需要 | 200 + `text/event-stream` | `ChatRequest`（含可选 `model` / `thinkingBudget`） | SSE 事件流 | `ChatController.chat` |
 | 8 | PUT | `/api/users/me/password` | 需要 | 200 | `ChangePasswordRequest` | `LoginResponse`（**新 token**） | `UserController.changePassword` |
 | 9 | GET | `/api/users` | **`@RequireAdmin`** | 200 | — | `UserVO[]`（按 `id` 升序） | `UserController.list` |
-| 10 | PUT | `/api/conversations/{id}/title` | 需要 | 200 | `RenameConversationRequest` | `ConversationVO`（更新后的那一条） | `ConversationController.rename` |
-| 11 | POST | `/api/conversations/{id}/regenerate` | 需要 | 200 + `text/event-stream` | `RegenerateRequest`（**整个体可省略**；`model` 不传沿用旧回答的模型） | SSE 事件流（与 7 号接口同一套） | `ChatController.regenerate` |
-| 12 | GET | `/api/llm/options` | 需要 | 200 | — | `LlmOptionsVO`（可选模型清单 + 服务端默认模型） | `LlmController.options` |
+| 10 | PUT | `/api/users/me/system-prompt` | 需要 | 200 | `UpdateSystemPromptRequest` | `UserVO`（更新后，含自己的 systemPrompt） | `UserController.updateSystemPrompt` |
+| 11 | PUT | `/api/conversations/{id}/title` | 需要 | 200 | `RenameConversationRequest` | `ConversationVO`（更新后的那一条） | `ConversationController.rename` |
+| 12 | POST | `/api/conversations/{id}/regenerate` | 需要 | 200 + `text/event-stream` | `RegenerateRequest`（**整个体可省略**；`model` 不传沿用旧回答的模型） | SSE 事件流（与 7 号接口同一套） | `ChatController.regenerate` |
+| 13 | GET | `/api/llm/options` | 需要 | 200 | — | `LlmOptionsVO`（可选模型清单 + 服务端默认模型） | `LlmController.options` |
 
 
 > 3~7 号接口的控制器方法都声明了 `CurrentUser` 形参（解析见 `CurrentUserArgumentResolver`），归属校验统一在 `ConversationService` / `ChatService` 里做：**查不到或不是自己的会话一律 404**，管理员也没有跨用户特权。
@@ -598,8 +604,8 @@ App.vue  （权限闸门：restoring / isAuthenticated）
   }
 }
 
-// UserVO —— 没有 password 字段
-{ "id": 1, "username": "admin", "role": 1, "roleLabel": "管理员", "createdAt": "..." }
+// UserVO —— 没有 password 字段；systemPrompt 只在「自己」的响应里出现，管理员的用户列表里恒为 null
+{ "id": 1, "username": "admin", "role": 1, "roleLabel": "管理员", "systemPrompt": "你是资深 DBA…", "createdAt": "..." }
 
 // ConversationVO
 { "id": 12, "title": "新的对话", "createdAt": "...", "updatedAt": "..." }
@@ -628,6 +634,9 @@ App.vue  （权限闸门：restoring / isAuthenticated）
 
 // RenameConversationRequest —— title 会被 trim；1~100 字，超了 400
 { "title": "周会纪要" }
+
+// UpdateSystemPromptRequest —— 全空白 = 清除人设；2000 字上限
+{ "systemPrompt": "你是资深 DBA，只回答数据库问题" }
 
 // RegenerateRequest —— 整个请求体都可以省略
 { "enableThinking": false }
@@ -688,8 +697,8 @@ POST /api/conversations/{id}/chat  {message, enableThinking?}
       2. applyAutoTitle(conversation, message)      // 标题仍为「新的对话」时，取消息前 30 字（超出加 …）
                                                     //   只改内存字段，第 3 步的 save() 会一并落库
       3. saveMessage(conversation, USER, message)   // 用户消息入库 + 刷新 conversation.updated_at
-      4. recentHistory(id)                          // LIMIT 下推到 SQL；助手消息的存库思考随历史回传（preserve_thinking）
-                                                    //   map 成 LlmMessage(role 小写, content)
+      4. recentHistory(id, user.systemPrompt)       // LIMIT 下推到 SQL；助手消息的存库思考随历史回传（preserve_thinking）
+                                                    //   人设非空时作为 system 消息放最前面，不占历史条数名额
       5. new SseEmitter(sseTimeoutMs)               // = requestTimeoutSeconds*1000 + 30000
          onTimeout / onError / onCompletion 都只做一件事：cancelled.set(true)
       6. executor.submit(() -> stream(...))         // 虚拟线程
@@ -822,6 +831,7 @@ send():
 15. **会话归属校验**：会话接口的控制器都接 `CurrentUser`，service 层按 `(id, owner_id)` 查；不存在**或属于别人**一律 404 而不是 403——403 会把「这个 id 确实存在」泄露出去，而 id 是自增的，等于让人枚举出全站有多少会话。管理员**没有**跨用户查看 / 删除的特权，真要做跨用户管理得单独设计（审计、转交、级联删），别指望在现有接口上加个角色判断就完事。
 
 16. **CORS 白名单来自配置**：`cors.allowed-origins` 默认只有 Vite 的 5173，对外部署用 `CORS_ALLOWED_ORIGINS` 覆盖；留空启动失败而不是退化成 `*`。非白名单源的跨域请求拿 403 且不带 `Access-Control-Allow-Origin` 头，同源请求和服务器间调用（不带 Origin 头）不受影响。
+17. **人设隐私**：`system_prompt` 只在用户自己的 `/me`、登录响应和改人设响应里出现；管理员 `GET /api/users` 恒为 null——「能列用户」不等于「能看别人的设置」。改人设**不换发 token**（与改密码刻意不同）：它不是安全事件，不该踢掉自己的其他设备。 |
 ---
 
 ## 十、开发指南
@@ -938,6 +948,7 @@ npm run preview      # 本地预览 dist/
 19. **qwen3.8-max / qwen3.8-flash 的 `preserve_thinking` 默认 true**：要求历史 assistant 消息把 `reasoning_content` 完整回传，且不支持拼进 `content` 回传。我们把存库的思考随历史带上（`LlmMessage.reasoningContent`）；缺了不报错但多轮推理质量打折。
 20. **`thinking_budget` 与 `reasoning_effort` 不能同时设置**（qwen3.8 系），同时设会报错。我们只发 `thinking_budget`；档位 4096 / 16384 对齐官方 low / medium 映射，131072 是 qwen3.8 系默认值、也正好是 qwen3.6-flash 的思维链上限。
 21. **本地百炼 wiki 快照曾缺 `qwen3.8-flash`**（flash 线只到 qwen3.7），导致一度误判该模型不存在；以官方 OpenAI 兼容 Chat 文档为准（文档里三处点名 qwen3.8-flash）。查模型存不存在别只信本地快照。
+22. **system 消息不占 `llm.max-history-messages` 名额**：它是人设不是对话，截历史不该把它截掉；但它**计入输入 token**，人设写两千字每轮都烧两千字的输入钱。 |
 
 ### 13.3 文档偏差记录（2026-09-21 已全部修正）
 
@@ -972,5 +983,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-24（第六次） | **P1-3：思考过程持久化**。`message` 加可空列 `reasoning`（LONGTEXT）；`ChatService` 在流式期间把思考全文攒进 `reasoningFull`，结束时随助手消息一起入库（中断 / 失败走 `savePartial` 也带上）；`MessageVO` 加 `reasoning` 并标 `@JsonInclude(NON_NULL)`，没思考时字段不下发；前端 `types.ts` / `ChatView` 把它读回 `UiMessage.reasoning`，刷新后折叠块可展开重读。**可空列迁移，旧消息保持 NULL，不需要清数据**（`init.sql`「已有库升级」第二段）。13.1 删掉「思考过程不持久化」重排为 5 条 |
 | 2026-09-24（第七次） | **P1-4：重新生成**。新增 `POST /api/conversations/{id}/regenerate`（SSE，请求体可省略）：`ConversationService.dropLastAssistantMessage()` 删最后一条助手消息并返回它前面的用户消息正文（最后一条不是助手消息 / 空会话 → 400），`ChatService` 把 SSE 骨架抽成 `startStream()` 供 chat 与 regenerate 共用。前端最后一条助手气泡挂弱化文字按钮，点击后本地 pop 旧回答再接流；`api.ts` 把 SSE 解析抽成 `consumeSse()` 供 `streamChat` / `streamRegenerate` 共用。实测：重跑后消息条数不变、旧回答 id 被新 id 替换、用户消息不动。13.1 第 2 条去掉「无重新生成」 |
 | 2026-09-24（第八次） | **P1-5 用量统计 + 模型 / 思考强度可选**。`message` 加 `model` / `prompt_tokens` / `completion_tokens` / `reasoning_tokens` 四列（可空，拿不到就 NULL）；流式请求开 `stream_options.include_usage`，用量帧在「空 choices」之前解析；`done` 事件附带 model + 用量供前端当场回填。新增 `GET /api/llm/options` 与配置 `llm.available-models`（默认含 **qwen3.8-flash**——本地 wiki 快照缺它，官方 Chat 文档确认存在）；请求体 `model` 走白名单校验、`thinkingBudget` 校验 1~262144 且思考关着时丢弃；历史 assistant 消息回传 `reasoning_content`（qwen3.8 系 preserve_thinking 默认 true）。界面：输入条加模型 / 思考强度两个选择器（档位 4096/16384/131072 对齐官方 reasoning_effort 映射），助手气泡加用量行。13.1 第 7 条改写、13.2 追加 19~21 条 |
+| 2026-09-24（第九次） | **每用户系统提示词**。`sys_user` 加可空列 `system_prompt`；`CurrentUser` 带上它（AuthInterceptor 本就回表），`ChatService.recentHistory` 在非空时把它作为 system 消息放在历史最前面（不占历史条数名额）；新增 `PUT /api/users/me/system-prompt`（2000 字上限、全空白=清除、不换发 token）；`UserVO` 加 `systemPrompt` 但管理员用户列表恒为 null；前端新增 `SystemPromptDialog` + 顶栏入口，保存后覆盖本地登录态、下一条消息立即生效。接口表 13 个；九加第 17 条、13.2 加第 22 条 |
 *最后更新：2026-09-24*
 

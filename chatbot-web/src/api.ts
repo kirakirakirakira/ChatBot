@@ -76,6 +76,18 @@ export function changePassword(oldPassword: string, newPassword: string): Promis
   })
 }
 
+/**
+ * 改自己的系统提示词（人设），每轮对话都会作为 system 消息放在历史最前面。
+ * 传全空白 = 清除。返回更新后的用户信息，调用方用它覆盖本地登录态里的 currentUser。
+ */
+export function updateSystemPrompt(systemPrompt: string): Promise<CurrentUser> {
+  return request<CurrentUser>('/users/me/system-prompt', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ systemPrompt }),
+  })
+}
+
 /** 用户列表，仅管理员（后端 @RequireAdmin；普通用户会拿到 403）。 */
 export function listUsers(): Promise<CurrentUser[]> {
   return request<CurrentUser[]>('/users')

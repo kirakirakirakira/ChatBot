@@ -51,6 +51,7 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 `types.ts` 的 `MessagePage` 对应后端 `MessagePageVO`。
 
 改密码成功后后端会换发新 token（响应体就是一份新的 `LoginResponse`），前端用它覆盖本地 token，当前会话不中断。
+改**系统提示词**则不换发 token（它不是安全事件）：响应是一份 `UserVO`，前端用它覆盖本地 `currentUser` 即可。
 
 ## SSE 流式解析
 
@@ -104,6 +105,7 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
         MessageBubble.vue         消息气泡，区分 user / assistant；助手消息走 Markdown、用户消息纯文本 + 思考折叠 + 重新生成按钮
         MarkdownContent.vue       Markdown 渲染容器：代码高亮 + 代码块复制按钮 + 流式光标
         ChangePasswordDialog.vue  修改密码，所有人可见
+        SystemPromptDialog.vue    系统提示词（人设），所有人可见；保存后下一条消息立即生效
         UserListDialog.vue        用户管理，仅 isAdmin 时可见
       assets/main.css
 

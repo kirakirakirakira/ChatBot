@@ -14,6 +14,8 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
   白名单模式：新加的接口默认受保护，不用改配置。
 - token 是自签 HMAC-SHA256，无状态。`auth.token-secret` **少于 32 字符后端直接启动失败**；
   改密码后旧 token 立即失效（payload 的 `iat` 用毫秒，与 `password_changed_at` 比对）。
+- **人设只属于自己**：`PUT /api/users/me/system-prompt` 改的是 token 里那个用户；管理员 `GET /api/users` 拿到的列表里 `systemPrompt` 恒为 null。
+  人设每轮作为 system 消息放在历史最前面，**计入输入 token**——写两千人设每轮就烧两千字输入钱。
 - **会话按用户隔离**：`conversation.owner_id` 记录归属，会话相关接口的控制器都接 `CurrentUser`，校验统一在 service 层。
   查不到或不是自己的会话**一律 404，不返回 403**——403 会把「这个 id 确实存在」泄露出去，而 id 是自增的，
   等于让人枚举出全站有多少会话。管理员也没有跨用户特权。
@@ -82,6 +84,7 @@ curl.exe -s -X PUT http://localhost:8089/api/conversations/1/title -H $h -H "Con
 curl.exe -N -X POST http://localhost:8089/api/conversations/1/regenerate -H $h -H "Content-Type: application/json" -d '{}'
 curl.exe -s http://localhost:8089/api/llm/options -H $h
 curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":"你好","model":"qwen3.8-max","thinkingBudget":16384}'
+curl.exe -s -X PUT http://localhost:8089/api/users/me/system-prompt -H $h -H "Content-Type: application/json" -d '{"systemPrompt":"你是资深 DBA，只回答数据库问题"}'
 curl.exe -s -i http://localhost:8089/api/conversations/99999/messages -H $h
 curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":""}'
 ```

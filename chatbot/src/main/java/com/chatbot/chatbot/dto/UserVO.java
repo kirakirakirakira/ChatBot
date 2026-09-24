@@ -14,10 +14,19 @@ public record UserVO(
         String username,
         Integer role,
         String roleLabel,
+        String systemPrompt,
         LocalDateTime createdAt) {
 
     public static UserVO from(User user) {
+        return from(user, true);
+    }
+
+    /**
+     * @param includeSystemPrompt 管理员看用户列表时传 false：别人的人设属于个人设置，
+     *                            不该因为「管理员能列用户」就顺带全看见。自己的 /me 和登录响应才带。
+     */
+    public static UserVO from(User user, boolean includeSystemPrompt) {
         return new UserVO(user.getId(), user.getUsername(), user.getRole(),
-                Roles.label(user.getRole()), user.getCreatedAt());
+                Roles.label(user.getRole()), includeSystemPrompt ? user.getSystemPrompt() : null, user.getCreatedAt());
     }
 }

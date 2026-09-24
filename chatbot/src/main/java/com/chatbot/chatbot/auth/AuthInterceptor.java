@@ -58,7 +58,7 @@ public class AuthInterceptor implements HandlerInterceptor {
             throw unauthorized("密码已修改，请重新登录");
         }
 
-        CurrentUser currentUser = new CurrentUser(user.getId(), user.getUsername(), user.getRole());
+        CurrentUser currentUser = new CurrentUser(user.getId(), user.getUsername(), user.getRole(), user.getSystemPrompt());
         if (requiresAdmin(handlerMethod) && !currentUser.isAdmin()) {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "需要管理员权限");
         }
