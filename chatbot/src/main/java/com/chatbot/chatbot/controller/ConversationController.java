@@ -1,9 +1,11 @@
 package com.chatbot.chatbot.controller;
 
 import com.chatbot.chatbot.auth.CurrentUser;
+import com.chatbot.chatbot.dto.AttachmentVO;
 import com.chatbot.chatbot.dto.ConversationVO;
 import com.chatbot.chatbot.dto.MessagePageVO;
 import com.chatbot.chatbot.dto.RenameConversationRequest;
+import com.chatbot.chatbot.service.AttachmentService;
 import com.chatbot.chatbot.service.ConversationService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -17,6 +19,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -29,9 +32,11 @@ import java.util.List;
 public class ConversationController {
 
     private final ConversationService conversationService;
+    private final AttachmentService attachmentService;
 
-    public ConversationController(ConversationService conversationService) {
+    public ConversationController(ConversationService conversationService, AttachmentService attachmentService) {
         this.conversationService = conversationService;
+        this.attachmentService = attachmentService;
     }
 
     @PostMapping
@@ -71,5 +76,19 @@ public class ConversationController {
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable Long id, CurrentUser user) {
         conversationService.delete(id, user);
+    }
+
+    /**
+     * 上传图片附件，返回它的 id（发消息时放进 attachmentIds）。multipart 字段名固定叫 file。
+     * <p>
+     * 挂在 /conversations/{id} 下而不是独立路径：附件从属于会话，归属校验直接复用 requireOwned，
+     * 也省掉「先传进一个无主空间、再想办法关联到会话」的一致性麻烦。
+     */
+    @PostMapping("/{id}/attachments")
+    @ResponseStatus(HttpStatus.CREATED)
+    public AttachmentVO uploadAttachment(@PathVariable Long id,
+                                         @RequestParam("file") MultipartFile file,
+                                         CurrentUser user) {
+        return attachmentService.upload(id, file, user);
     }
 }

@@ -6,6 +6,32 @@ export interface Conversation {
   updatedAt: string
 }
 
+/**
+ * 图片附件的元信息（后端 AttachmentVO）。
+ * 刻意不含字节：图片内容走 GET /api/attachments/{id} 单独取（要带 Authorization 头，
+ * 所以不能用 <img src>，得 fetch 成 blob 再转 objectURL）。
+ */
+export interface Attachment {
+  id: number
+  mime: string
+  fileName: string
+  /** 原始字节数。 */
+  size: number
+}
+
+/**
+ * 界面渲染用的一张图。比 Attachment 多两种状态：
+ * id 为 null = 还在上传 / 上传失败；url 有值 = 本地预览地址，直接用，不必再向后端要一遍。
+ */
+export interface AttachmentRef {
+  id: number | null
+  mime: string
+  fileName: string
+  size: number
+  /** 本地 objectURL。由创建它的一方负责 revoke（见 ChatView 的 localUrls）。 */
+  url?: string
+}
+
 /** 后端返回的单条历史消息。 */
 export interface Message {
   id: number
@@ -21,6 +47,8 @@ export interface Message {
   completionTokens?: number
   /** 其中思考占的输出 token。 */
   reasoningTokens?: number
+  /** 这条消息带的图片（只有用户消息会有）；没图时后端不下发该字段。 */
+  attachments?: Attachment[]
   createdAt: string
 }
 
@@ -28,6 +56,8 @@ export interface Message {
 export interface LlmOptions {
   models: string[]
   defaultModel: string
+  /** models 的子集：能吃图片输入的模型。选中模型不在里面时，界面隐藏「上传图片」按钮。 */
+  visionModels: string[]
 }
 
 /**
@@ -72,6 +102,8 @@ export interface UiMessage {
   promptTokens?: number
   completionTokens?: number
   reasoningTokens?: number
+  /** 这条消息带的图片；发送时先用本地预览地址，历史加载时只有 id、由缩略图组件去取字节。 */
+  attachments?: AttachmentRef[]
 }
 
 /** 后端返回的登录用户信息（UserVO）。没有 password 字段，哈希也不出网。 */

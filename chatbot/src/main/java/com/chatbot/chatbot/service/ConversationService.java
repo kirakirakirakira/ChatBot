@@ -1,6 +1,7 @@
 package com.chatbot.chatbot.service;
 
 import com.chatbot.chatbot.auth.CurrentUser;
+import com.chatbot.chatbot.dto.AttachmentVO;
 import com.chatbot.chatbot.dto.ConversationVO;
 import com.chatbot.chatbot.dto.MessagePageVO;
 import com.chatbot.chatbot.dto.RenameConversationRequest;
@@ -8,6 +9,7 @@ import com.chatbot.chatbot.dto.MessageVO;
 import com.chatbot.chatbot.entity.Conversation;
 import com.chatbot.chatbot.entity.Message;
 import com.chatbot.chatbot.entity.Role;
+import com.chatbot.chatbot.repository.AttachmentRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
 import com.chatbot.chatbot.repository.MessageRepository;
 import com.chatbot.chatbot.repository.UserRepository;
@@ -21,7 +23,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 会话的增删查 + 消息分页。
@@ -44,13 +48,20 @@ public class ConversationService {
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
     private final UserRepository userRepository;
+    /**
+     * 直接用 repository 而不是 AttachmentService：AttachmentService 要靠本类的 requireOwned 做归属校验，
+     * 反向再依赖它就是构造器循环，Spring 起不来。「附件元信息按消息分组」本来也是消息列表自己的事。
+     */
+    private final AttachmentRepository attachmentRepository;
 
     public ConversationService(ConversationRepository conversationRepository,
                                MessageRepository messageRepository,
-                               UserRepository userRepository) {
+                               UserRepository userRepository,
+                               AttachmentRepository attachmentRepository) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.userRepository = userRepository;
+        this.attachmentRepository = attachmentRepository;
     }
 
     /**
@@ -90,8 +101,13 @@ public class ConversationService {
         boolean hasMore = rows.size() > size;
         List<Message> window = hasMore ? rows.subList(0, size) : rows;
 
+        // 附件元信息一次查完再分组：逐条消息查就是 N+1，一页 50 条要跑 50 次 SQL
+        Map<Long, List<AttachmentVO>> attachments = attachmentsOf(window);
+
         // 查出来是 id 倒序（最新在前），反转成时间正序再交给前端，前端不用再自己倒一遍
-        List<MessageVO> items = new ArrayList<>(window.stream().map(MessageVO::from).toList());
+        List<MessageVO> items = new ArrayList<>(window.stream()
+                .map(m -> MessageVO.from(m, attachments.get(m.getId())))
+                .toList());
         Collections.reverse(items);
 
         Long cursor = (hasMore && !items.isEmpty()) ? items.get(0).id() : null;
@@ -118,8 +134,30 @@ public class ConversationService {
     @Transactional
     public void delete(Long id, CurrentUser user) {
         Conversation conversation = requireOwned(id, user);
+        // 附件也要一起删，而且必须排在会话之前：fk_attachment_conversation 是 RESTRICT，留着会直接报约束冲突
+        attachmentRepository.deleteByConversationId(conversation.getId());
         messageRepository.deleteByConversationId(conversation.getId());
         conversationRepository.delete(conversation);
+    }
+
+    /**
+     * 一批消息的附件元信息，key = message id。
+     * JPQL 构造器投影只取 id / mime / 文件名 / 大小——列表要的是缩略图信息，不是 LONGBLOB 字节；
+     * 字节由前端按需一张张调 GET /api/attachments/{id} 取，切会话时压根不会把图片全下载一遍。
+     */
+    private Map<Long, List<AttachmentVO>> attachmentsOf(List<Message> messages) {
+        List<Long> ids = messages.stream().map(Message::getId).toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<AttachmentVO>> grouped = new LinkedHashMap<>();
+        for (Object[] row : attachmentRepository.findMetaByMessageIdIn(ids)) {
+            Long messageId = (Long) row[0];
+            AttachmentVO vo = (AttachmentVO) row[1];
+            grouped.computeIfAbsent(messageId, k -> new ArrayList<>()).add(vo);
+        }
+        // SQL 里已按 attachment.id 升序，分组后天然保持「上传顺序即展示顺序」
+        return grouped;
     }
 
     /**
@@ -130,12 +168,21 @@ public class ConversationService {
      * <p>
      * 用户消息不删也不重存：它已经在库里，重跑时历史里自然带着它，而旧回答已经不在历史里了。
      */
-    /** 重新生成前置的返回值：被删回答前面那条用户消息的正文 + 被删回答当时用的模型（重跑默认沿用）。 */
-    public record DroppedReply(String prompt, String model) {
+    /**
+     * 重新生成前置的返回值：被删回答前面那条用户消息的正文、被删回答当时用的模型（重跑默认沿用）、
+     * 以及被删回答自己的 id（校验都过了再删）。
+     */
+    public record DroppedReply(String prompt, String model, Long assistantMessageId) {
     }
 
-    @Transactional
-    public DroppedReply dropLastAssistantMessage(Long conversationId) {
+    /**
+     * 只定位不删除。
+     * <p>
+     * 拆开是「图片输入」带来的需要：重跑前得先确认「历史里有图片、但这次选的模型不支持图片」，
+     * 那种情况必须 400 在删除之前——否则用户既拿不到新回答，连原来那条也被删了。
+     */
+    @Transactional(readOnly = true)
+    public DroppedReply locateRegenerateTarget(Long conversationId) {
         List<Message> all = messageRepository.findByConversationIdOrderByIdAsc(conversationId);
         Message last = all.isEmpty() ? null : all.get(all.size() - 1);
         if (last == null || last.getRole() != Role.ASSISTANT) {
@@ -151,8 +198,13 @@ public class ConversationService {
         if (prompt == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "找不到要重跑的用户消息，无法重新生成");
         }
-        messageRepository.deleteById(last.getId());
-        return new DroppedReply(prompt, last.getModel());
+        return new DroppedReply(prompt, last.getModel(), last.getId());
+    }
+
+    /** 校验都过了，删掉那条旧回答。 */
+    @Transactional
+    public void deleteAssistantMessage(Long messageId) {
+        messageRepository.deleteById(messageId);
     }
 
     /**

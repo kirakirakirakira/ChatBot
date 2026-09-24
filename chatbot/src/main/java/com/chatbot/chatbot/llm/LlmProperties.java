@@ -32,5 +32,12 @@ public record LlmProperties(
          * 界面可选的模型白名单（逗号分隔）。请求里带的 model 必须在这里面，否则 400——
          * 既防手滑填错模型名，也防把请求打到没买额度 / 没开权限的模型上。
          */
-        @DefaultValue("qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max") List<String> availableModels) {
+        @DefaultValue("qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max") List<String> availableModels,
+        /**
+         * availableModels 的子集：支持图片输入（视觉理解）的模型。
+         * 单独列一份而不是「默认全都支持」：往非多模态模型发 image_url，百炼要么 400、要么静默忽略图片，
+         * 两种结果都很难排查。带图片但模型不在这里时后端直接 400，并把可选模型写进错误文案。
+         * 前端拿它决定要不要显示「上传图片」按钮（见 LlmOptionsVO#visionModels）。
+         */
+        @DefaultValue("qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max") List<String> visionModels) {
 }

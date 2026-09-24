@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { UiMessage } from '@/types'
+import AttachmentThumb from '@/components/AttachmentThumb.vue'
 import MarkdownContent from '@/components/MarkdownContent.vue'
 
 defineProps<{
@@ -21,6 +22,11 @@ const emit = defineEmits<{
     </div>
 
     <div class="body">
+      <!-- 图片排在文字之前：和发给模型的顺序一致（图先、问题后），读起来也是「先看图再看你要问什么」 -->
+      <div v-if="message.attachments && message.attachments.length > 0" class="att-row">
+        <AttachmentThumb v-for="(a, i) in message.attachments" :key="a.id ?? 'local-' + i" :attachment="a" />
+      </div>
+
       <!-- 思考过程：生成中默认展开，结束后收起，可手动再展开。
            :open 绑成 undefined 而不是 false：open="false" 这个属性只要存在就生效。 -->
       <details v-if="message.reasoning" class="reasoning" :open="message.streaming || undefined">
@@ -124,6 +130,18 @@ const emit = defineEmits<{
 .placeholder {
   color: var(--text-muted);
   font-size: 14px;
+}
+
+/* 多图横排、超出换行；用户消息靠右，所以用 flex-end */
+.att-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-start;
+}
+
+.row.user .att-row {
+  justify-content: flex-end;
 }
 
 .reasoning {

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import AttachmentThumb from '@/components/AttachmentThumb.vue'
 import ConversationSidebar from '@/components/ConversationSidebar.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 import SystemPromptDialog from '@/components/SystemPromptDialog.vue'
 import UserListDialog from '@/components/UserListDialog.vue'
 import UserMenu from '@/components/UserMenu.vue'
-import type { CurrentUser, LoginResult, UiMessage } from '@/types'
+import type { AttachmentRef, CurrentUser, LoginResult, Message as MessagePageItem, UiMessage } from '@/types'
 import type { StreamHandlers, StreamOptions } from '@/api'
 import { clearSession, currentUser, isAdmin, setSession, token } from '@/auth'
 import {
@@ -18,6 +19,7 @@ import {
   listConversations,
   streamChat,
   streamRegenerate,
+  uploadAttachment,
 } from '@/api'
 
 const conversations = ref<Awaited<ReturnType<typeof listConversations>>>([])
@@ -37,6 +39,51 @@ const thinkingOn = ref(true)
 /** 模型选择器：清单来自后端 /api/llm/options（配置 llm.available-models），选中值存 localStorage。 */
 const llmModels = ref<string[]>([])
 const selectedModel = ref('')
+/**
+ * 支持图片输入的模型（后端 llm.vision-models，available-models 的子集）。
+ * 选中的模型不在里面时直接隐藏上传入口：让用户传完图再收一个 400，比一开始就不给按钮糟糕得多。
+ */
+const visionModels = ref<string[]>([])
+const visionEnabled = computed(() => visionModels.value.includes(selectedModel.value))
+
+/** 一条消息最多几张图 / 单张多大。两个数都和后端保持一致（AttachmentService.MAX_PER_MESSAGE、multipart 上限）。 */
+const MAX_IMAGES = 4
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024
+const ACCEPTED_IMAGE_MIME = ['image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/bmp']
+
+/** 待发送的图片：先上传拿 id，点发送时把 id 放进 attachmentIds。 */
+interface PendingImage extends AttachmentRef {
+  /** 本地唯一键。id 在上传完成前是 null，不能拿来做 :key。 */
+  key: string
+  uploading: boolean
+  error?: string
+}
+const pending = ref<PendingImage[]>([])
+const pendingBusy = computed(() => pending.value.some((p) => p.uploading))
+const fileInput = ref<HTMLInputElement | null>(null)
+const dragging = ref(false)
+
+/**
+ * 本地创建的 objectURL 登记表。谁创建谁释放，但这些 URL 在「待发送区 → 已发送气泡」之间是移交的，
+ * 所以统一由本组件在切会话 / 卸载时释放，避免 AttachmentThumb 提前 revoke 掉气泡正在用的地址。
+ */
+const localUrls = new Set<string>()
+let pendingSeq = 0
+
+function trackUrl(url: string): string {
+  localUrls.add(url)
+  return url
+}
+
+function revokeLocalUrls(): void {
+  localUrls.forEach((u) => URL.revokeObjectURL(u))
+  localUrls.clear()
+}
+
+function clearPending(): void {
+  pending.value = []
+  revokeLocalUrls()
+}
 /**
  * 思考强度档位，值是思维链 token 上限（Chat Completions 的 thinking_budget）；'' = 不限，不下发该参数、用模型默认。
  * 档位对齐百炼官方 reasoning_effort 的映射（low=4096 / medium=16384），「深入」取 131072：
@@ -153,6 +200,7 @@ async function loadLlmOptions(): Promise<void> {
   try {
     const options = await fetchLlmOptions()
     llmModels.value = options.models
+    visionModels.value = options.visionModels ?? []
     const stored = localStorage.getItem('chatbot.model')
     const fallback = options.models.includes(options.defaultModel)
       ? options.defaultModel
@@ -164,6 +212,137 @@ async function loadLlmOptions(): Promise<void> {
       : ''
   } catch (e) {
     fatalError.value = errMsg(e)
+  }
+}
+
+/**
+ * 保证有一个活动会话，返回它的 id；建不出来就返回 null（错误已写进横幅）。
+ * 选图和发送都要用：选图时可能还停在「刚删完最后一个会话」的空状态上，得先把会话建出来才能往上挂附件。
+ */
+async function ensureConversation(): Promise<number | null> {
+  if (activeId.value !== null) {
+    return activeId.value
+  }
+  try {
+    const created = await createConversation()
+    await loadConversations()
+    activeId.value = created.id
+    return created.id
+  } catch (e) {
+    fatalError.value = errMsg(e)
+    return null
+  }
+}
+
+function pickFiles(): void {
+  fileInput.value?.click()
+}
+
+function onFileInputChange(e: Event): void {
+  const el = e.target as HTMLInputElement | null
+  if (el?.files) {
+    void addFiles(el.files)
+  }
+  // 必须清空 value：否则连续两次选同一个文件不会触发 change
+  if (el) {
+    el.value = ''
+  }
+}
+
+/** 粘贴截图（Ctrl+V）是最常见的传图方式，不能只支持点按钮选文件。 */
+function onPaste(e: ClipboardEvent): void {
+  const files = Array.from(e.clipboardData?.files ?? []).filter((x) => x.type.startsWith('image/'))
+  if (files.length === 0) {
+    return
+  }
+  e.preventDefault()
+  void addFiles(files)
+}
+
+function onDrop(e: DragEvent): void {
+  dragging.value = false
+  const files = Array.from(e.dataTransfer?.files ?? []).filter((x) => x.type.startsWith('image/'))
+  if (files.length === 0) {
+    return
+  }
+  e.preventDefault()
+  void addFiles(files)
+}
+
+/**
+ * 选中即上传（不等点发送）：图片上传可能几百毫秒，攒到发送那一刻会让「点发送」明显卡一下。
+ * 校验全在前端先做一遍（类型 / 大小 / 张数），后端还有一道同样的校验兜底。
+ */
+async function addFiles(list: FileList | File[]): Promise<void> {
+  const files = Array.from(list)
+  if (files.length === 0) {
+    return
+  }
+  const room = MAX_IMAGES - pending.value.length
+  if (room <= 0) {
+    fatalError.value = `一条消息最多带 ${MAX_IMAGES} 张图片`
+    return
+  }
+  const accepted: File[] = []
+  for (const file of files.slice(0, room)) {
+    if (!ACCEPTED_IMAGE_MIME.includes(file.type)) {
+      fatalError.value = '只支持 PNG / JPEG / WebP / GIF / BMP 图片'
+      continue
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      fatalError.value = `图片不能超过 5MB（${file.name} 是 ${(file.size / 1024 / 1024).toFixed(1)}MB）`
+      continue
+    }
+    accepted.push(file)
+  }
+  if (files.length > room) {
+    fatalError.value = `一条消息最多带 ${MAX_IMAGES} 张图片，多出来的已忽略`
+  }
+  if (accepted.length === 0) {
+    return
+  }
+  const conversationId = await ensureConversation()
+  if (conversationId === null) {
+    return
+  }
+  for (const file of accepted) {
+    const item: PendingImage = {
+      key: 'p' + ++pendingSeq,
+      id: null,
+      mime: file.type,
+      fileName: file.name,
+      size: file.size,
+      url: trackUrl(URL.createObjectURL(file)),
+      uploading: true,
+    }
+    pending.value.push(item)
+    try {
+      const saved = await uploadAttachment(conversationId, file)
+      // 上传期间用户可能已经把它移除了，所以要按 key 找回来再改
+      const target = pending.value.find((p) => p.key === item.key)
+      if (target) {
+        target.id = saved.id
+        target.uploading = false
+      }
+    } catch (e) {
+      const target = pending.value.find((p) => p.key === item.key)
+      if (target) {
+        target.uploading = false
+        target.error = errMsg(e)
+      }
+    }
+  }
+}
+
+function removePending(key: string): void {
+  const index = pending.value.findIndex((p) => p.key === key)
+  if (index < 0) {
+    return
+  }
+  const removed = pending.value.splice(index, 1)[0]
+  if (removed?.url) {
+    URL.revokeObjectURL(removed.url)
+    localUrls.delete(removed.url)
   }
 }
 
@@ -191,6 +370,9 @@ async function selectConversation(id: number): Promise<void> {
     return
   }
   stopStreaming()
+  // 没发出去的图属于「上一个会话的草稿」，跟着会话一起丢掉：附件是按会话上传的，
+  // 留到别的会话里发只会被后端 400（附件不属于该会话）
+  clearPending()
   // 先记下「要离开的那个对话是不是空的」：activeId 和 messages 一被覆盖就查不到了
   const leavingId = activeId.value
   const leavingWasEmpty = leavingId !== null && activeIsEmpty.value
@@ -202,16 +384,7 @@ async function selectConversation(id: number): Promise<void> {
     // 只取最新一页，更早的靠「加载更早的消息」按需翻，不再一次性把整段历史拉下来渲染
     const page = await getMessages(id, { limit: PAGE_SIZE })
     // reasoning / model / 用量都从库里读回来：刷新后仍能展开思考、看到这条回答是谁花的钱
-    messages.value = page.items.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      reasoning: m.reasoning,
-      model: m.model,
-      promptTokens: m.promptTokens,
-      completionTokens: m.completionTokens,
-      reasoningTokens: m.reasoningTokens,
-    }))
+    messages.value = page.items.map(toUiMessage)
     hasMoreOlder.value = page.hasMore
     olderCursor.value = page.beforeId
     activeIsEmpty.value = page.items.length === 0
@@ -226,6 +399,21 @@ async function selectConversation(id: number): Promise<void> {
   // 切换成功后再清理空对话：切换失败时用户还停在原对话上，不能把它删了
   if (leavingWasEmpty && leavingId !== null) {
     await discardEmptyConversation(leavingId)
+  }
+}
+
+/** 后端消息 → 界面消息。附件只带元信息（id / 文件名），字节由 AttachmentThumb 按需去取。 */
+function toUiMessage(m: MessagePageItem): UiMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    reasoning: m.reasoning,
+    model: m.model,
+    promptTokens: m.promptTokens,
+    completionTokens: m.completionTokens,
+    reasoningTokens: m.reasoningTokens,
+    attachments: m.attachments?.map((a) => ({ id: a.id, mime: a.mime, fileName: a.fileName, size: a.size })),
   }
 }
 
@@ -261,16 +449,7 @@ async function loadOlder(): Promise<void> {
     if (activeId.value !== id) {
       return
     }
-    const older = page.items.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      reasoning: m.reasoning,
-      model: m.model,
-      promptTokens: m.promptTokens,
-      completionTokens: m.completionTokens,
-      reasoningTokens: m.reasoningTokens,
-    }))
+    const older = page.items.map(toUiMessage)
     messages.value = [...older, ...messages.value]
     hasMoreOlder.value = page.hasMore
     olderCursor.value = page.beforeId
@@ -376,28 +555,49 @@ function stopStreaming(): void {
 
 async function send(): Promise<void> {
   const text = input.value.trim()
-  if (!text || streaming.value) {
+  const images = pending.value
+  if (streaming.value) {
+    return
+  }
+  // 纯图片提问是合法的：有图就允许文字为空（后端 ChatRequest.message 上也刻意没有 @NotBlank）
+  if (!text && images.length === 0) {
+    return
+  }
+  if (pendingBusy.value) {
+    fatalError.value = '图片还在上传，请稍候'
+    return
+  }
+  const broken = images.find((p) => p.error !== undefined || p.id === null)
+  if (broken) {
+    fatalError.value = broken.error ?? '有图片没上传成功，请移除后重试'
+    return
+  }
+  if (images.length > 0 && !visionEnabled.value) {
+    fatalError.value = `模型 ${selectedModel.value} 不支持图片输入，请换个模型或移除图片`
     return
   }
   fatalError.value = ''
 
   // 没有活动会话（比如刚删完）就先建一个
-  let conversationId = activeId.value
+  const conversationId = await ensureConversation()
   if (conversationId === null) {
-    try {
-      const created = await createConversation()
-      await loadConversations()
-      conversationId = created.id
-      activeId.value = created.id
-    } catch (e) {
-      fatalError.value = errMsg(e)
-      return
-    }
+    return
   }
 
+  const attachmentIds = images.map((p) => p.id).filter((x): x is number => x !== null)
+  // 预览地址随消息一起移交给气泡：AttachmentThumb 见 url 有值就不再向后端要一遍
+  const sentAttachments: AttachmentRef[] = images.map((p) => ({
+    id: p.id,
+    mime: p.mime,
+    fileName: p.fileName,
+    size: p.size,
+    url: p.url,
+  }))
+
   input.value = ''
+  pending.value = [] // 只清列表，不 revoke：URL 的所有权已经交给 localUrls，切会话/卸载时统一释放
   activeIsEmpty.value = false // 这条消息一发出去，它就不是空对话了，切走时不该被删
-  messages.value.push({ id: null, role: 'user', content: text })
+  messages.value.push({ id: null, role: 'user', content: text, attachments: sentAttachments })
   messages.value.push({ id: null, role: 'assistant', content: '', reasoning: '', streaming: true })
   // 从数组里取回响应式代理再改：直接改 push 进去的原始对象不会触发视图更新
   const reply = messages.value[messages.value.length - 1]!
@@ -409,7 +609,7 @@ async function send(): Promise<void> {
     await streamChat(
       conversationId,
       text,
-      streamOptions(),
+      { ...streamOptions(), attachmentIds: attachmentIds.length > 0 ? attachmentIds : undefined },
       streamHandlers(reply),
       abortController.signal,
     )
@@ -519,7 +719,10 @@ onMounted(async () => {
  * 组件卸载（退出登录、或 token 失效被弹回登录页）时必须掐断还在跑的 SSE：
  * 否则 fetch 会继续往一个已经不存在的界面上写增量，还白烧模型的 token。
  */
-onBeforeUnmount(stopStreaming)
+onBeforeUnmount(() => {
+  stopStreaming()
+  clearPending()
+})
 </script>
 
 <template>
@@ -591,15 +794,45 @@ onBeforeUnmount(stopStreaming)
       </div>
 
       <footer class="composer-wrap">
-        <div class="composer">
+        <div
+          class="composer"
+          :class="{ dragging }"
+          @dragover.prevent="dragging = true"
+          @dragleave.prevent="dragging = false"
+          @drop.prevent="onDrop"
+        >
+          <!-- 待发送的图片：先传后发，所以这里能看到每张的上传状态；点 × 移除 -->
+          <div v-if="pending.length > 0" class="pending">
+            <div v-for="p in pending" :key="p.key" class="pending-item">
+              <AttachmentThumb :attachment="p" :size="54" />
+              <span v-if="p.uploading" class="pending-badge">上传中</span>
+              <span v-else-if="p.error" class="pending-badge bad" :title="p.error">失败</span>
+              <button class="pending-x" type="button" title="移除这张图" @click="removePending(p.key)">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+              </button>
+            </div>
+            <p v-if="!visionEnabled" class="pending-warn">
+              当前模型 {{ selectedModel }} 不支持图片输入，换个模型或移除图片后才能发送
+            </p>
+          </div>
+
           <textarea
             ref="composer"
             v-model="input"
             class="composer-input"
             rows="1"
-            placeholder="输入消息，Enter 发送，Shift+Enter 换行"
+            :placeholder="visionEnabled ? '输入消息，Enter 发送，Shift+Enter 换行；可直接粘贴 / 拖入图片' : '输入消息，Enter 发送，Shift+Enter 换行'"
             @keydown="onKeydown"
+            @paste="onPaste"
           ></textarea>
+          <input
+            ref="fileInput"
+            type="file"
+            accept="image/png,image/jpeg,image/webp,image/gif,image/bmp"
+            multiple
+            hidden
+            @change="onFileInputChange"
+          />
           <div class="composer-bar">
             <div class="composer-left">
               <label
@@ -620,6 +853,18 @@ onBeforeUnmount(stopStreaming)
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a15 15 0 0 1 0 18" /><path d="M12 3a15 15 0 0 0 0 18" /></svg>
                 联网
               </label>
+              <!-- 上传按钮只在选中模型支持图片时出现：按钮在却用不了，比没有按钮更让人恼火 -->
+              <button
+                v-if="visionEnabled"
+                class="pill-btn"
+                type="button"
+                :disabled="streaming || pending.length >= MAX_IMAGES"
+                :title="`上传图片（最多 ${MAX_IMAGES} 张，单张 ≤5MB）`"
+                @click="pickFiles"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="m21 15-5-5L5 21" /></svg>
+                图片
+              </button>
               <select
                 v-model="selectedModel"
                 class="pill-select"
@@ -650,7 +895,7 @@ onBeforeUnmount(stopStreaming)
               v-else
               class="round-btn send"
               type="button"
-              :disabled="!input.trim()"
+              :disabled="!input.trim() && pending.length === 0"
               title="发送"
               @click="send"
             >
@@ -851,6 +1096,95 @@ onBeforeUnmount(stopStreaming)
 .composer:focus-within {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent), var(--shadow-1);
+}
+
+/* 拖图进来时给个明确的落点反馈，否则用户不知道松手会发生什么 */
+.composer.dragging {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent), var(--shadow-1);
+}
+
+.pending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 2px 4px 8px;
+}
+
+.pending-item {
+  position: relative;
+}
+
+.pending-badge {
+  position: absolute;
+  left: 4px;
+  bottom: 4px;
+  padding: 1px 5px;
+  border-radius: var(--radius-pill);
+  font-size: 10px;
+  color: #fff;
+  background: color-mix(in srgb, var(--text) 55%, transparent);
+  pointer-events: none;
+}
+
+.pending-badge.bad {
+  background: var(--danger);
+}
+
+.pending-x {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--text) 62%, transparent);
+  color: #fff;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.pending-x:hover {
+  background: var(--danger);
+}
+
+.pending-warn {
+  margin: 0;
+  width: 100%;
+  font-size: 12px;
+  color: var(--danger);
+}
+
+/* 上传按钮做成和 pill-toggle 同一套视觉，但它是「动作」不是「开关」，所以没有 on 态 */
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all 120ms ease;
+}
+
+.pill-btn:hover:not(:disabled) {
+  color: var(--accent-strong);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-soft);
+}
+
+.pill-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .composer-input {

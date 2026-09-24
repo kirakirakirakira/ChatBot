@@ -10,7 +10,9 @@ import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import org.springframework.web.server.ResponseStatusException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.util.stream.Collectors;
 
@@ -43,6 +45,24 @@ public class GlobalExceptionHandler {
                 .map(GlobalExceptionHandler::formatFieldError)
                 .collect(Collectors.joining("; "));
         return build(HttpStatus.BAD_REQUEST.value(), detail.isBlank() ? "请求参数校验失败" : detail, request);
+    }
+
+    /**
+     * 上传超过 spring.servlet.multipart.max-file-size / max-request-size。
+     * 异常在 multipart 解析阶段抛出，压根到不了 controller 里那道 5MB 校验，
+     * 不接住就是 500 + Spring 默认错误页——用户只看到「上传失败」，不知道是图太大。
+     */
+    @ExceptionHandler(MaxUploadSizeExceededException.class)
+    public ResponseEntity<ErrorResponse> handleTooLarge(MaxUploadSizeExceededException ex,
+                                                        HttpServletRequest request) {
+        return build(HttpStatus.CONTENT_TOO_LARGE.value(), "图片太大：单个文件上限 5MB", request);
+    }
+
+    /** multipart 请求里缺了 file 字段（比如用 curl 忘了 -F "file=@..."）。 */
+    @ExceptionHandler(MissingServletRequestPartException.class)
+    public ResponseEntity<ErrorResponse> handleMissingPart(MissingServletRequestPartException ex,
+                                                           HttpServletRequest request) {
+        return build(HttpStatus.BAD_REQUEST.value(), "缺少上传字段: " + ex.getRequestPartName(), request);
     }
 
     /** 请求体不是合法 JSON。 */

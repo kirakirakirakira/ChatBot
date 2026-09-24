@@ -4,6 +4,7 @@ import com.chatbot.chatbot.auth.CurrentUser;
 import com.chatbot.chatbot.dto.ChatEvent;
 import com.chatbot.chatbot.dto.ChatRequest;
 import com.chatbot.chatbot.dto.RegenerateRequest;
+import com.chatbot.chatbot.entity.Attachment;
 import com.chatbot.chatbot.entity.Conversation;
 import com.chatbot.chatbot.entity.Message;
 import com.chatbot.chatbot.entity.Role;
@@ -12,6 +13,7 @@ import com.chatbot.chatbot.llm.LlmClient;
 import com.chatbot.chatbot.llm.LlmMessage;
 import com.chatbot.chatbot.llm.LlmProperties;
 import com.chatbot.chatbot.llm.LlmStreamListener;
+import com.chatbot.chatbot.repository.AttachmentRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
 import com.chatbot.chatbot.repository.MessageRepository;
 import jakarta.annotation.PreDestroy;
@@ -28,7 +30,9 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -46,6 +50,9 @@ public class ChatService {
     private static final String DEFAULT_TITLE = "新的对话";
     private static final int TITLE_MAX_LENGTH = 30;
 
+    /** 纯图片提问（没有文字）时的会话标题。只要不等于 DEFAULT_TITLE 就不会被后续消息覆盖。 */
+    private static final String IMAGE_ONLY_TITLE = "[图片]";
+
     /**
      * thinking_budget 的界面/接口上限。取 qwen3.8 系的「最大思维链长度」262144
      * （raw/model-user-guide/.../qwen3-8-max.md）；超过模型自身上限时百炼返回 400 并在文案里写明该模型的上限。
@@ -58,6 +65,8 @@ public class ChatService {
     private final ConversationService conversationService;
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
+    private final AttachmentRepository attachmentRepository;
+    private final AttachmentService attachmentService;
     private final LlmClient llmClient;
     private final LlmProperties llmProperties;
     private final ObjectMapper objectMapper;
@@ -72,12 +81,16 @@ public class ChatService {
     public ChatService(ConversationService conversationService,
                        ConversationRepository conversationRepository,
                        MessageRepository messageRepository,
+                       AttachmentRepository attachmentRepository,
+                       AttachmentService attachmentService,
                        LlmClient llmClient,
                        LlmProperties llmProperties,
                        ObjectMapper objectMapper) {
         this.conversationService = conversationService;
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
+        this.attachmentRepository = attachmentRepository;
+        this.attachmentService = attachmentService;
         this.llmClient = llmClient;
         this.llmProperties = llmProperties;
         this.objectMapper = objectMapper;
@@ -102,12 +115,29 @@ public class ChatService {
     public SseEmitter chat(Long conversationId, ChatRequest request, CurrentUser user) {
         Conversation conversation = conversationService.requireOwned(conversationId, user);
 
-        applyAutoTitle(conversation, request.message());
-        saveMessage(conversation, Role.USER, request.message(), null);
+        String text = (request.message() == null) ? "" : request.message().strip();
+        // 先校验附件再落库：id 不存在 / 属于别人的会话 / 已被别的消息占用，都在这里 400，不会留下半条消息
+        List<Long> attachmentIds = attachmentService.validateForConversation(conversationId, request.attachmentIds());
+        if (text.isEmpty() && attachmentIds.isEmpty()) {
+            // ChatRequest.message 上刻意没有 @NotBlank（纯图片提问合法），所以这条规则挪到这里判
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "message 不能为空");
+        }
 
         LlmCallOptions options = buildOptions(request.enableThinking(), request.model(), null,
                 request.thinkingBudget(), request.enableSearch());
-        return startStream(conversation, recentHistory(conversation.getId(), user.systemPrompt()), options);
+        if (!attachmentIds.isEmpty()) {
+            requireVisionModel(options.model());
+        }
+
+        applyAutoTitle(conversation, text, !attachmentIds.isEmpty());
+        Message userMessage = saveMessage(conversation, Role.USER, text, null);
+        attachmentService.linkToMessage(attachmentIds, userMessage.getId(), conversationId);
+
+        List<LlmMessage> history = recentHistory(conversation.getId(), user.systemPrompt());
+        // 兜住「这次没传图，但历史窗口里有旧图，而用户刚把模型换成了不支持图片的」：
+        // 此时消息已落库才报 400 是可接受的——换回多模态模型点「重新生成」就能继续，用户消息不会丢
+        requireVisionSupport(history, options.model());
+        return startStream(conversation, history, options);
     }
 
     /**
@@ -119,7 +149,7 @@ public class ChatService {
      */
     public SseEmitter regenerate(Long conversationId, RegenerateRequest request, CurrentUser user) {
         Conversation conversation = conversationService.requireOwned(conversationId, user);
-        ConversationService.DroppedReply dropped = conversationService.dropLastAssistantMessage(conversationId);
+        ConversationService.DroppedReply dropped = conversationService.locateRegenerateTarget(conversationId);
         // 没指定模型就沿用被删那条回答的模型：用户当初选了什么，重跑就该还是什么
         String requestedModel = (request != null && request.model() != null && !request.model().isBlank())
                 ? request.model() : dropped.model();
@@ -129,7 +159,36 @@ public class ChatService {
                 null,
                 (request == null) ? null : request.thinkingBudget(),
                 (request == null) ? null : request.enableSearch());
-        return startStream(conversation, recentHistory(conversation.getId(), user.systemPrompt()), options);
+
+        // 删除之前先按「删除前的历史」查一遍图片支持：助手消息从不带附件，所以这一遍看到的图片
+        // 和删除后是同一批。不这么做的话，模型不支持图片时旧回答已经被删了、新的又生成不出来。
+        requireVisionSupport(recentHistory(conversationId, user.systemPrompt()), options.model());
+
+        conversationService.deleteAssistantMessage(dropped.assistantMessageId());
+
+        // 删掉旧回答腾出 token 预算后，可能把更早的带图消息拉进窗口，所以再查一次（这次才是权威的）
+        List<LlmMessage> history = recentHistory(conversationId, user.systemPrompt());
+        requireVisionSupport(history, options.model());
+        return startStream(conversation, history, options);
+    }
+
+    /** 模型必须支持图片输入。文案里直接列出可用模型，用户当场知道该切到哪个。 */
+    private void requireVisionModel(String model) {
+        if (!llmProperties.visionModels().contains(model)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "模型 " + model + " 不支持图片输入，请改用: "
+                            + String.join(" / ", llmProperties.visionModels()));
+        }
+    }
+
+    /** 历史里出现图片段时才校验模型；纯文本会话连一次集合查找都不用做。 */
+    private void requireVisionSupport(List<LlmMessage> history, String model) {
+        for (LlmMessage m : history) {
+            if (m.hasImages()) {
+                requireVisionModel(model);
+                return;
+            }
+        }
     }
 
     /**
@@ -352,7 +411,7 @@ public class ChatService {
         List<Message> newestFirst = messageRepository.findByConversationId(
                 conversationId, PageRequest.of(0, HISTORY_SCAN_LIMIT, Sort.by(Sort.Direction.DESC, "id")));
 
-        List<LlmMessage> picked = new ArrayList<>();
+        List<Message> picked = new ArrayList<>();
         int tokens = 0;
         for (Message m : newestFirst) {
             // 思考也计入：preserve_thinking 会把 reasoning_content 一起回传，它同样烧输入 token
@@ -362,14 +421,49 @@ public class ChatService {
             if (countFull || budgetFull) {
                 break;
             }
-            picked.add(new LlmMessage(m.getRole().name().toLowerCase(), m.getContent(), m.getReasoning()));
+            picked.add(m);
             tokens += messageTokens;
         }
         Collections.reverse(picked);
+
+        // 附件只给「真的会被发出去」的那几条消息查：附件是 LONGBLOB，
+        // 按整个扫描窗口查等于每轮对话都把最多 200 条消息的图片字节捞进内存
+        Map<Long, List<Attachment>> images = imagesOf(picked);
+
+        List<LlmMessage> out = new ArrayList<>(picked.size() + 1);
         if (systemPrompt != null && !systemPrompt.isBlank()) {
-            picked.add(0, LlmMessage.of("system", systemPrompt.strip()));
+            out.add(LlmMessage.of("system", systemPrompt.strip()));
         }
-        return picked;
+        for (Message m : picked) {
+            String role = m.getRole().name().toLowerCase();
+            List<Attachment> atts = images.get(m.getId());
+            out.add((atts == null || atts.isEmpty())
+                    ? new LlmMessage(role, m.getContent(), m.getReasoning())
+                    : LlmMessage.multimodal(role, m.getContent(), atts, m.getReasoning()));
+        }
+        return out;
+    }
+
+    /**
+     * 这批消息各自带的图片（含字节），key = message id；一张都没有就返回空 Map。
+     * <p>
+     * 已知取舍：图片占的 token 不计入 max-history-tokens 预算（估算器只认文字）。
+     * 视觉 token 由分辨率决定，本地算不准；真要严格控制成本得改成按 usage 回填的动态预算。
+     */
+    private Map<Long, List<Attachment>> imagesOf(List<Message> messages) {
+        List<Long> ids = messages.stream().map(Message::getId).toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        List<Attachment> rows = attachmentRepository.findByMessageIdInOrderByIdAsc(ids);
+        if (rows.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<Attachment>> grouped = new LinkedHashMap<>();
+        for (Attachment a : rows) {
+            grouped.computeIfAbsent(a.getMessageId(), k -> new ArrayList<>()).add(a);
+        }
+        return grouped;
     }
 
     /**
@@ -402,13 +496,18 @@ public class ChatService {
      * 用首条用户消息给会话起标题，否则侧边栏永远是一排「新的对话」。
      * 只改内存字段，紧接着 saveMessage() 里的 save() 会一并落库。
      */
-    private void applyAutoTitle(Conversation conversation, String userMessage) {
+    private void applyAutoTitle(Conversation conversation, String userMessage, boolean hasImages) {
         String current = conversation.getTitle();
         if (current != null && !current.isBlank() && !DEFAULT_TITLE.equals(current)) {
             return;
         }
         String title = userMessage.strip().replaceAll("\\s+", " ");
         if (title.isEmpty()) {
+            // 纯图片提问也得给个标题：一直叫「新的对话」的话，前端「已经有一个空对话就复用它」的判断
+            // 会把这个已经有图的会话当空壳，点新建对话就跳进来而不是开新会话
+            if (hasImages) {
+                conversation.setTitle(IMAGE_ONLY_TITLE);
+            }
             return;
         }
         if (title.length() > TITLE_MAX_LENGTH) {

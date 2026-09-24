@@ -1,4 +1,12 @@
-import type { ChatStreamEvent, Conversation, CurrentUser, LlmOptions, LoginResult, MessagePage } from '@/types'
+import type {
+  Attachment,
+  ChatStreamEvent,
+  Conversation,
+  CurrentUser,
+  LlmOptions,
+  LoginResult,
+  MessagePage,
+} from '@/types'
 import { clearSession, token } from '@/auth'
 
 const BASE = '/api'
@@ -142,9 +150,37 @@ export function deleteConversation(conversationId: number): Promise<void> {
   return request<void>(`/conversations/${conversationId}`, { method: 'DELETE' })
 }
 
-/** 模型选项：界面选择器的数据源，来自配置 llm.available-models。 */
+/** 模型选项：界面选择器的数据源，来自配置 llm.available-models / llm.vision-models。 */
 export function fetchLlmOptions(): Promise<LlmOptions> {
   return request<LlmOptions>('/llm/options')
+}
+
+/**
+ * 上传一张图片，返回它的 id（发消息时放进 attachmentIds）。
+ * 不手动设 Content-Type：FormData 的 multipart 边界由浏览器生成，写死了反而会让后端解析失败。
+ */
+export function uploadAttachment(conversationId: number, file: File): Promise<Attachment> {
+  const form = new FormData()
+  form.append('file', file)
+  return request<Attachment>(`/conversations/${conversationId}/attachments`, { method: 'POST', body: form })
+}
+
+/**
+ * 取附件字节并转成本地 objectURL。
+ * 为什么不能直接 <img src="/api/attachments/1">：img 标签带不了 Authorization 头，
+ * 而后端刻意不做 ?token= 兜底（那等于把长期凭证写进 URL、日志和浏览器历史）。
+ * 调用方负责在不用时 URL.revokeObjectURL()。
+ */
+export async function fetchAttachmentUrl(attachmentId: number): Promise<string> {
+  const response = await fetch(`${BASE}/attachments/${attachmentId}`, { headers: withAuth() })
+  if (!response.ok) {
+    const message = await extractErrorMessage(response)
+    if (response.status === 401) {
+      clearSession()
+    }
+    throw new Error(message)
+  }
+  return URL.createObjectURL(await response.blob())
 }
 
 /**
@@ -158,6 +194,8 @@ export interface StreamOptions {
   thinkingBudget?: number | null
   /** 联网搜索：按次计费，所以由界面显式开关控制，不给默认值。 */
   enableSearch?: boolean
+  /** 随本条消息发送的图片附件 id；不带 = 纯文本消息。重新生成不需要它（图片已经挂在原用户消息上）。 */
+  attachmentIds?: number[]
 }
 
 /** done 事件带回来的用量，字段名与后端 JSON 一致（下划线）。 */
@@ -261,6 +299,9 @@ function pickStreamOptions(options: StreamOptions): Record<string, unknown> {
   }
   if (options.enableSearch !== undefined) {
     body.enableSearch = options.enableSearch
+  }
+  if (options.attachmentIds && options.attachmentIds.length > 0) {
+    body.attachmentIds = options.attachmentIds
   }
   return body
 }

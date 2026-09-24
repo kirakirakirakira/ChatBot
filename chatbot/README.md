@@ -22,6 +22,14 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
 - **消息接口是分页的**：`GET /api/conversations/{id}/messages` 返回 `{items, beforeId, hasMore}` 而不是数组，
   `before`（id 游标）和 `limit`（默认 50、上限 200）走 query 参数。用游标不用 offset：
   一边翻页一边有新消息入库时，offset 分页会重复或漏消息。
+- **图片走两步**：先 `POST /api/conversations/{id}/attachments`（multipart 字段名 `file`）拿附件 id，
+  再在 `ChatRequest.attachmentIds` 里带上。字节存 MySQL `attachment.data`（LONGBLOB），
+  读取走 `GET /api/attachments/{id}` —— **要登录、按会话归属校验（404 口径与会话一致）**，
+  所以前端只能 fetch 成 blob 再转 objectURL，不能用 `<img src>`，也不做 `?token=` 兜底。
+  单张 ≤5MB、每条消息 ≤4 张、MIME 白名单 5 种位图（**无 SVG**）。
+- **带图请求打到不支持图片的模型会 400**（`llm.vision-models` 白名单），错误文案里列出可用模型。
+  校验顺序是刻意的：附件合法性与模型白名单都在用户消息落库**之前**；只有「历史窗口里有旧图、用户刚换了非视觉模型」
+  这一种情况会在落库后报 400——那种情况下用户消息还在，换回视觉模型点重新生成即可恢复。
 
 会话标题：发出第一条消息时，自动用该消息前 30 字替换「新的对话」，前端侧边栏可以直接显示。
 
@@ -107,6 +115,8 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 | llm.api-key | 空 | 留空自动走 `MockLlmClient` |
 | llm.model | qwen3.6-flash | **只是默认值**：请求体带 `model` 时以请求为准 |
 | llm.available-models | qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max | 界面可选模型白名单（逗号分隔，`LLM_AVAILABLE_MODELS` 可覆盖）。请求里的 `model` 不在里面就 400，错误文案里带上清单 |
+| llm.vision-models | 同 available-models | available-models 的子集：能吃图片输入的模型（`LLM_VISION_MODELS` 可覆盖）。`GET /api/llm/options` 把它作为 `visionModels` 下发，前端靠它决定显不显示上传按钮 |
+| spring.servlet.multipart.max-file-size / -request-size | 5MB / 6MB | 单张图上限 / 整个 multipart 请求上限（`UPLOAD_MAX_FILE_SIZE` / `UPLOAD_MAX_REQUEST_SIZE`）。超了是 **413**，由 `GlobalExceptionHandler` 接住给中文文案 |
 | llm.enable-thinking | true | 映射为请求体顶层的 `enable_thinking`，取舍见下 |
 | llm.request-timeout-seconds | 900 | 整轮生成的上限，**不是空闲超时**。SSE 超时自动取它 +30 秒 |
 | llm.max-history-messages | 20 | 历史的**条数**上限，<=0 不限制；与 token 预算谁先满足谁生效 |
@@ -134,6 +144,14 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 三个边界：① OpenAI 兼容协议**拿不到搜索来源 / 角标**，引用 UI 做不了；② `qwen3.8-max` / `qwen3.8-flash` 在兼容协议下不支持 `search_strategy: agent`，我们固定用默认 turbo；
 ③ 计费约 turbo 3 元/千次 + 检索内容拼进提示词的输入 token，所以**界面默认关**。
 
+**图片输入（多模态）**：带附件的消息在送给模型时，`content` 从字符串变成数组
+`[{"type":"image_url","image_url":{"url":"data:<mime>;base64,..."}}..., {"type":"text","text":"..."}]`（图在前、文在后）。
+字节以 base64 内联而不是给 URL：附件存在自己库里，没有可公网访问的地址。
+三个已知边界：① 图片占的 token **不计入** `llm.max-history-tokens` 预算（估算器只认文字，视觉 token 由分辨率决定），
+带图会话的真实上下文看用量里的 `prompt_tokens`（实测一张 320×200 的图约 90 token，且每轮历史都会重发）；
+② 一个附件只属于一条消息（`linkToMessage` 带 `message_id IS NULL` 条件），重复提交同一个 id 会 400；
+③ 2026-09-24 实测 qwen3.6/3.7/3.8-flash 与 qwen3.8-max 在兼容协议下都能正确读图。
+
 **preserve_thinking**：qwen3.8-max / qwen3.8-flash 默认 true，要求历史 assistant 消息把 `reasoning_content` 完整回传、且不支持拼进 `content`。
 我们把存库的思考随历史带上；缺了不报错，但多轮推理质量会打折。
 换到不认识 `enable_thinking` 的服务商（OpenAI、DeepSeek 等）时，把 properties 里那行整行注释掉，
@@ -143,15 +161,18 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 
     auth/        TokenService（签发/校验）、AuthInterceptor（拦截 + 回表查用户）、CurrentUser 及其
                  ArgumentResolver、RequireAdmin 注解、Roles 常量、AuthProperties
-    controller/  REST 入口：Auth / Conversation / Chat / User
-    service/     ChatService（SSE 编排、取消、历史截断、自动起标题）、UserService（登录、改密码）、ConversationService
-    repository/  Spring Data JPA：Conversation / Message / User
-    entity/      Conversation / Message / User / Role
-    dto/         请求与响应对象，含统一错误体 ErrorResponse、SSE 事件体 ChatEvent
-    llm/         LlmClient 接口 + LlmStreamListener（思考/回答双通道回调）+ Mock 与 OpenAI 兼容实现
+    controller/  REST 入口：Auth / Conversation / Chat / User / Attachment
+    service/     ChatService（SSE 编排、取消、历史截断、自动起标题、多模态历史拼装）、UserService（登录、改密码）、
+                 ConversationService（会话 CRUD + 消息分页 + 附件元信息分组）、AttachmentService（图片上传/校验/读取）
+    repository/  Spring Data JPA：Conversation / Message / User / Attachment
+    entity/      Conversation / Message / User / Attachment / Role
+    dto/         请求与响应对象，含统一错误体 ErrorResponse、SSE 事件体 ChatEvent、附件元信息 AttachmentVO
+    llm/         LlmClient 接口 + LlmStreamListener（思考/回答双通道回调）+ Mock 与 OpenAI 兼容实现 +
+                 LlmContentPart（多模态 content 数组的元素）
     config/      WebConfig（CORS + 拦截器 + 参数解析器）、CorsProperties（CORS 白名单）、
                  AuthConfig（BCrypt）、LlmConfig、AdminUserInitializer、GlobalExceptionHandler
 
 ## 后续待加
 
-会话重命名接口、暂无。会话重命名、重新生成、token 用量统计均已于 2026-09-24 完成。
+暂无硬性缺口。候选方向（都已在 PROJECT_OVERVIEW.md 十二节展开）：把 `attachment.data` 换成对象存储 key
+（多实例部署的前提）、给「传了没发」的孤儿附件加定时清理、按 `usage` 回填做动态 token 预算（把图片 token 也算进去）。

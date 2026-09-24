@@ -45,6 +45,14 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 两者都随每条消息下发并存在 localStorage；存过的模型若已不在白名单（配置改了），回落到服务端默认，而不是留一个后端会 400 的 id。
 助手气泡底部有一行用量：`模型 · 输入 x / 输出 y tokens（含思考 z）`。
 
+**图片输入**：输入条的「图片」按钮（+ 粘贴截图 + 拖拽）只在选中模型支持图片时出现
+（`GET /api/llm/options` 的 `visionModels`，即后端 `llm.vision-models`）。流程是「选中即上传」：
+`uploadAttachment()` 先拿附件 id，缩略图条显示上传中 / 失败，点发送时把 id 放进 `attachmentIds`。
+本地先做四道校验（张数 ≤4、MIME 白名单、≤5MB、全部上传成功），后端还有一道同样的兜底。
+历史消息里的图由 `AttachmentThumb.vue` 按 id 调 `fetchAttachmentUrl()` 取字节转 objectURL——
+**不能用 `<img src="/api/attachments/1">`**：img 标签带不了 `Authorization` 头，而后端刻意不做 `?token=` 兜底。
+objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸载时统一 revoke），组件自己 fetch 的归组件（卸载时 revoke）。
+
 消息历史是**游标分页**：`getMessages(id, {before, limit})` 只取最新一页（默认 50 条），
 `ChatView` 在还有更早消息时于消息区顶部显示「加载更早的消息」，点击后把上一页插到列表头部并补偿滚动位置
 （不补偿的话，往顶部插 50 条会把视口顶下去，用户正在读的那条消息直接跑掉）。
@@ -98,6 +106,7 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 - 顶栏几乎隐形：只有会话标题和头像菜单，管理入口全收进下拉
 - 代码块固定深色底，不跟暗色模式切换（浅色主题下深色代码块对比度更好，也省一套主题 CSS）
 - 输入条的开关与选择：**思考**、**联网**（默认关——搜索按次计费）、模型、思考强度，都随每条消息下发；思考与联网的选择存 localStorage
+- 待发送图片缩略图条放在输入框上方：上传状态（上传中 / 失败）和移除按钮都在缩略图上，不占输入框空间；拖图进来时合成框高亮给落点反馈
 
 ## 目录结构
 
@@ -113,7 +122,8 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
         ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 / 模型 / 思考强度 + 停止生成
       components/
         ConversationSidebar.vue   会话列表，按 updated_at 倒序，支持新建 / 删除 / 双击改名
-        MessageBubble.vue         消息气泡，区分 user / assistant；助手消息走 Markdown、用户消息纯文本 + 思考折叠 + 重新生成按钮
+        MessageBubble.vue         消息气泡，区分 user / assistant；助手消息走 Markdown、用户消息纯文本 + 图片缩略图 + 思考折叠 + 重新生成按钮
+        AttachmentThumb.vue       单张图的缩略图：有本地 url 直接用，只有 id 时 fetch 字节转 objectURL（自己 revoke）；点击新标签看原图
         MarkdownContent.vue       Markdown 渲染容器：代码高亮 + 代码块复制按钮 + 流式光标
         ChangePasswordDialog.vue  修改密码，所有人可见
         SystemPromptDialog.vue    系统提示词（人设），所有人可见；保存后下一条消息立即生效

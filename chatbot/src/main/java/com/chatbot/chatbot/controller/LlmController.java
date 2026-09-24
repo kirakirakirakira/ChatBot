@@ -22,6 +22,7 @@ public class LlmController {
 
     @GetMapping("/options")
     public LlmOptionsVO options() {
-        return new LlmOptionsVO(llmProperties.availableModels(), llmProperties.model());
+        return new LlmOptionsVO(llmProperties.availableModels(), llmProperties.model(),
+                llmProperties.visionModels());
     }
 }

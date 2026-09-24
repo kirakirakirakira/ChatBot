@@ -64,6 +64,29 @@ CREATE TABLE IF NOT EXISTS `message` (
   CONSTRAINT `FK6yskk3hxw5sklwgi25y6d5u1l` FOREIGN KEY (`conversation_id`) REFERENCES `conversation` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 图片附件（多模态输入），对应实体 com.chatbot.chatbot.entity.Attachment。
+-- data 用 LONGBLOB 直接存字节：单机部署少一个「文件跑哪去了」的运维面，代价是库变大、备份变慢；
+--   图片限 5MB、每条消息限 4 张，量级可控。要多实例部署就把 data 换成对象存储的 key。
+-- message_id 可空：NULL = 传上来了还没随消息发出去（孤儿附件，随会话删除一起清掉）。
+--   刻意不做外键指向 message：附件先于消息存在（先上传拿 id，再发消息），且一个附件只属于一条消息，
+--   这个不变式由 AttachmentRepository.linkToMessage 的 "message_id IS NULL" 条件保证。
+-- conversation_id 是外键且 RESTRICT：删会话前必须先删附件，ConversationService.delete 已经按这个顺序做了。
+-- size 列叫 size_bytes：JPQL 里 size 是保留函数名。
+CREATE TABLE IF NOT EXISTS `attachment` (
+  `id`              bigint       NOT NULL AUTO_INCREMENT,
+  `conversation_id` bigint       NOT NULL,
+  `message_id`      bigint       DEFAULT NULL,
+  `mime`            varchar(64)  NOT NULL,
+  `file_name`       varchar(255) NOT NULL,
+  `size_bytes`      bigint       NOT NULL,
+  `data`            longblob     NOT NULL,
+  `created_at`      datetime(6)  NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_attachment_conversation` (`conversation_id`),
+  KEY `idx_attachment_message` (`message_id`),
+  CONSTRAINT `fk_attachment_conversation` FOREIGN KEY (`conversation_id`) REFERENCES `conversation` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 初始管理员：admin / admin（下面是字符串 admin 的 BCrypt 哈希，cost=10）。
 -- INSERT IGNORE + username 唯一索引保证脚本可重复执行，也不会把改过的密码覆盖回 admin。登录后请立刻换掉这个默认密码。
 INSERT IGNORE INTO `sys_user` (`username`, `password`, `role`, `created_at`)

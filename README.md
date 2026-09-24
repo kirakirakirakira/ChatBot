@@ -18,7 +18,7 @@ DashScope or any other OpenAI-compatible model.
 | ----- | ---- |
 | Backend | Java 26, Spring Boot 4.1.1, Spring Data JPA, MySQL 8 |
 | Frontend | Vue 3.5, TypeScript 6, Vite 8, markdown-it + highlight.js + DOMPurify (assistant-message rendering) |
-| LLM | Bailian DashScope (OpenAI-compatible), streaming, per-request model selection (`llm.available-models`), thinking budget, and opt-in web search (`enable_search`). No API key configured -> local mock LLM |
+| LLM | Bailian DashScope (OpenAI-compatible), streaming, per-request model selection (`llm.available-models`), thinking budget, opt-in web search (`enable_search`), and image input (`llm.vision-models` whitelist, attachments stored in MySQL). No API key configured -> local mock LLM |
 
 ## Project Structure
 
