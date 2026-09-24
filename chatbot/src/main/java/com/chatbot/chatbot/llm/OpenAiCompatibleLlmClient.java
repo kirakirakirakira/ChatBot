@@ -58,6 +58,11 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         if (options.thinkingBudget() != null) {
             body.put("thinking_budget", options.thinkingBudget());
         }
+        // 联网搜索：只在显式开启时下发。兼容协议拿不到搜索来源/角标（只有 DashScope 原生协议支持），
+        // 所以这里不做任何引用相关的解析，模型把检索结果消化进回答里就完事。
+        if (Boolean.TRUE.equals(options.enableSearch())) {
+            body.put("enable_search", true);
+        }
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(props.baseUrl() + "/chat/completions"))

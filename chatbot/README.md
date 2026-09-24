@@ -85,6 +85,7 @@ curl.exe -N -X POST http://localhost:8089/api/conversations/1/regenerate -H $h -
 curl.exe -s http://localhost:8089/api/llm/options -H $h
 curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":"你好","model":"qwen3.8-max","thinkingBudget":16384}'
 curl.exe -s -X PUT http://localhost:8089/api/users/me/system-prompt -H $h -H "Content-Type: application/json" -d '{"systemPrompt":"你是资深 DBA，只回答数据库问题"}'
+curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":"今天上海天气","enableSearch":true}'
 curl.exe -s -i http://localhost:8089/api/conversations/99999/messages -H $h
 curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":""}'
 ```
@@ -127,6 +128,10 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 **思考强度（`thinking_budget`）**：请求体可带正整数，限制思维链 token 上限；不传则用模型默认（qwen3.8 系默认 131072）。
 界面档位 4096 / 16384 / 131072 对齐百炼 `reasoning_effort` 的 low / medium 映射；**`thinking_budget` 与 `reasoning_effort` 不能同时设置**（qwen3.8 系），我们只发前者。
 超过某模型的「最大思维链长度」会返回 400 并在文案里写明上限（qwen3.6-flash 是 131072，qwen3.8 系是 262144）。
+
+**联网搜索（`enable_search`）**：请求体带 `"enableSearch": true` 时后端下发 `enable_search: true`，模型可检索实时网页（天气 / 新闻 / 股价）。
+三个边界：① OpenAI 兼容协议**拿不到搜索来源 / 角标**，引用 UI 做不了；② `qwen3.8-max` / `qwen3.8-flash` 在兼容协议下不支持 `search_strategy: agent`，我们固定用默认 turbo；
+③ 计费约 turbo 3 元/千次 + 检索内容拼进提示词的输入 token，所以**界面默认关**。
 
 **preserve_thinking**：qwen3.8-max / qwen3.8-flash 默认 true，要求历史 assistant 消息把 `reasoning_content` 完整回传、且不支持拼进 `content`。
 我们把存库的思考随历史带上；缺了不报错，但多轮推理质量会打折。

@@ -217,12 +217,12 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | 文件 | 职责 |
 |---|---|
 | `LlmClient.java` | 接口，唯一方法 `streamChat(List<LlmMessage> messages, LlmCallOptions options, LlmStreamListener listener)`。**阻塞方法**，调用方应在虚拟线程中执行；正常返回=生成结束，失败抛异常 |
-| `LlmCallOptions.java` | record `(model, enableThinking, thinkingBudget)`：单次调用的模型 / 思考开关 / 思考预算。可选项收进 record，以后加参数（temperature 之类）不用改接口签名 |
+| `LlmCallOptions.java` | record `(model, enableThinking, thinkingBudget, enableSearch)`：单次调用的模型 / 思考开关 / 思考预算 / 联网搜索。可选项收进 record，以后加参数不用改接口签名 |
 | `LlmStreamListener.java` | 回调接口：`onToken(String)`（必须实现，正式回答增量）+ `onReasoning(String)`、`onUsage(int, int, Integer)`（均 `default` 空实现：思考增量、本轮用量） |
 | `LlmMessage.java` | record `(role, content, reasoningContent)`，OpenAI 格式。`reasoningContent` 标 `@JsonProperty("reasoning_content")` + NON_NULL：qwen3.8-max / qwen3.8-flash 的 preserve_thinking 默认 true，要求历史 assistant 消息把思考完整回传 |
 | `LlmProperties.java` | `@ConfigurationProperties(prefix="llm")` record：`baseUrl`、`apiKey`、`model`（**只是默认值，请求可覆盖**）、`maxHistoryMessages`(默认20，<=0 不限)、`enableThinking`(Boolean，可为 null)、`requestTimeoutSeconds`(默认900)、`availableModels`(界面可选模型白名单，默认 `qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max`) |
-| `OpenAiCompatibleLlmClient.java` | 真实实现。`POST {baseUrl}/chat/completions`，body `{model(来自 options), stream:true, messages, stream_options:{include_usage:true}, enable_thinking?, thinking_budget?}`；头 `Authorization: Bearer <apiKey>`。**usage 只在流式最后一帧返回且该帧 choices 为空**，解析必须放在「空 choices 就跳过」之前，否则永远拿不到用量。逐行读 SSE：跳过非 `data:` 行、`[DONE]` 结束；同一帧里 reasoning_content 与 content 都可能有值，按 reasoning → content 顺序回调。非 200 抛 `IllegalStateException("LLM API 返回 <code>: <body>")` |
-| `MockLlmClient.java` | 无 key 时的本地假实现，用来先跑通整条流式链路。`CHAR_DELAY_MS = 15`，**按码点切而不是按 char 切**（非 BMP 字符在 UTF-16 占 2 个 char，拆成落单 char 后 Jackson 编不出 UTF-8，SSE 里变成两个 `?`）。思考开关为 true 时先推一段假 `onReasoning`，没 key 也能验证 reasoning 链路。 |
+| `OpenAiCompatibleLlmClient.java` | 真实实现。`POST {baseUrl}/chat/completions`，body `{model(来自 options), stream:true, messages, stream_options:{include_usage:true}, enable_thinking?, thinking_budget?, enable_search?}`；头 `Authorization: Bearer <apiKey>`。**usage 只在流式最后一帧返回且该帧 choices 为空**，解析必须放在「空 choices 就跳过」之前，否则永远拿不到用量。逐行读 SSE：跳过非 `data:` 行、`[DONE]` 结束；同一帧里 reasoning_content 与 content 都可能有值，按 reasoning → content 顺序回调。非 200 抛 `IllegalStateException("LLM API 返回 <code>: <body>")` |
+| `MockLlmClient.java` | 无 key 时的本地假实现，用来先跑通整条流式链路。`CHAR_DELAY_MS = 15`，**按码点切而不是按 char 切**（非 BMP 字符在 UTF-16 占 2 个 char，拆成落单 char 后 Jackson 编不出 UTF-8，SSE 里变成两个 `?`）。思考开关为 true 时先推一段假 `onReasoning`、联网开关为 true 时先推一行「【Mock 联网】」，没 key 也能验证 reasoning / 联网这两条链路。 |
 
 **repository/ — Spring Data JPA**
 
@@ -380,6 +380,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `fatalError` | 全局错误横幅（列表加载失败、删除失败等） |
 | `showPasswordDialog` / `showUserDialog` | 两个弹窗开关 |
 | `showPromptDialog` | 系统提示词弹窗开关 |
+| `searchOn` | 联网搜索开关，**默认关**（搜索按次计费，不该在用户没注意时 silently 花钱），存 `localStorage.chatbot.search` |
 | `activeIsEmpty` | 当前会话是否「一条消息都没有」。**只在历史加载成功后才更新**，加载中/失败保持 false，否则会把「还没读出来」的会话误判成空会话删掉 |
 | `abortController` | 当前 SSE 的 `AbortController`（模块级 `let`，非 ref） |
 | `scroller` | 消息区 DOM ref，`scrollToBottom()` 用 |
@@ -400,6 +401,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | 人设 | 顶栏「系统提示词」→ 弹窗编辑 → 保存后覆盖本地 `currentUser`，**下一条消息立即生效**（后端每轮把 `CurrentUser.systemPrompt` 拼成 system 消息） | 人设挂在用户上而不是会话上：同一个人所有会话共用一套人设，换账号就是另一套 |
 | 顶栏收纳 | 会话标题 + 头像菜单（`UserMenu`）；管理入口全在下拉里 | 聊天界面的顶栏应该几乎隐形，主角是消息列 |
 | 空状态 | 问候语 + 三条开场建议 chips，点击填进输入框并聚焦 | 让用户面对空白输入框发呆是最差的开场 |
+| 联网搜索 | 输入条「联网」pill，随每条消息下发 `enableSearch`；后端在请求体加 `enable_search: true`（仅 true 时下发）。搜索策略固定默认 turbo | 兼容协议拿不到引用来源，做不了引用 UI；qwen3.8 系在兼容协议下不支持 agent 策略，多一个旋钮只会多一种选错 |
 | 收尾 | `finally` 里 `reply.streaming = false`、`streaming = false`、`abortController = null`、`scrollToBottom()`、`void loadConversations()` | 首条消息会触发后端自动起标题，刷新列表才能拿到新标题和新排序 |
 | 停止生成 | `stopStreaming()` = `abortController.abort()`，**不调任何后端接口**。`AbortError` 在 catch 里静默处理 | 后端检测连接断开就停止调模型并把已生成部分入库 |
 | 键盘 | `onKeydown()`：Enter 发送、Shift+Enter 换行、**`e.isComposing` 时不发送** | 中文输入法候选态的 Enter 不该触发发送 |
@@ -622,7 +624,7 @@ App.vue  （权限闸门：restoring / isAuthenticated）
 { "items": [ { "id": 34, "role": "user", "content": "你好", "createdAt": "..." } ], "beforeId": 34, "hasMore": true }
 // items 已按时间正序；beforeId=null 表示没有更早的了；hasMore=false 时前端不再显示「加载更早的消息」
 // ChatRequest
-{ "message": "你好", "enableThinking": true, "model": "qwen3.8-max", "thinkingBudget": 16384 }
+{ "message": "你好", "enableThinking": true, "model": "qwen3.8-max", "thinkingBudget": 16384, "enableSearch": true }
 // enableThinking 可省略（= 用服务端 llm.enable-thinking）；model 可省略（= 用 llm.model，须落在 llm.available-models 里）；
 // thinkingBudget 可省略（= 不下发 thinking_budget），思考关着时后端忽略它
 
@@ -925,8 +927,9 @@ npm run preview      # 本地预览 dist/
 
 1. **无文件上传 / 多模态**：只支持纯文本对话。
 2. **SSE 单向**：客户端断开后无法恢复，只能重新发起请求；已生成部分会入库，刷新能看到。
-3. **无自动化测试**：`src/test` 只有空的 `contextLoads()`，且需要真 MySQL。原本还有个手动脚本 `chatbot/test_sse.py`（gitignore、不入库），**已于 2026-09-24 删除**；现在 SSE 全链路只剩 curl 手测。
-4. **`LlmClient` Bean 启动时定型**（Mock vs OpenAI 兼容实现二选一，运行期改 `llm.api-key` 必须重启）；但**模型 id 已可每请求切换**（`llm.available-models` 白名单 + 请求体 `model`），不再是「全服务只有一个模型」。
+3. **无自动化测试**：`src/test` 只有空的 `contextLoads()`，且需要真 MySQL。原本还有个手动脚本 `chatbot/test_sse.py`（gitignore、不入库），**已于 2026-09-24 删除**；现在 SSE 全链路只剩 curl 手测。
+4. **联网搜索拿不到引用来源**：OpenAI 兼容协议不支持「返回搜索来源 / 角标标注」（只有 DashScope 原生协议支持），所以界面上没有「参考了哪几个网页」；要做引用 UI 得换协议，是另一个工程量。
+5. **`LlmClient` Bean 启动时定型**（Mock vs OpenAI 兼容实现二选一，运行期改 `llm.api-key` 必须重启）；但**模型 id 已可每请求切换**（`llm.available-models` 白名单 + 请求体 `model`），不再是「全服务只有一个模型」。
 
 ### 13.2 容易踩的坑
 
@@ -952,6 +955,7 @@ npm run preview      # 本地预览 dist/
 20. **`thinking_budget` 与 `reasoning_effort` 不能同时设置**（qwen3.8 系），同时设会报错。我们只发 `thinking_budget`；档位 4096 / 16384 对齐官方 low / medium 映射，131072 是 qwen3.8 系默认值、也正好是 qwen3.6-flash 的思维链上限。
 21. **本地百炼 wiki 快照曾缺 `qwen3.8-flash`**（flash 线只到 qwen3.7），导致一度误判该模型不存在；以官方 OpenAI 兼容 Chat 文档为准（文档里三处点名 qwen3.8-flash）。查模型存不存在别只信本地快照。
 22. **system 消息不占 `llm.max-history-messages` 名额**：它是人设不是对话，截历史不该把它截掉；但它**计入输入 token**，人设写两千字每轮都烧两千字的输入钱。 |
+23. **联网搜索默认关且只暴露开关**：turbo 策略约 3 元/千次 + 检索内容带来的输入 token；`qwen3.8-max` / `qwen3.8-flash` 在 Chat Completions 下不支持 `search_strategy: agent`（要 agent 得走 Responses API），所以界面不给策略选择。 |
 
 ### 13.3 文档偏差记录（2026-09-21 已全部修正）
 
@@ -988,5 +992,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-24（第八次） | **P1-5 用量统计 + 模型 / 思考强度可选**。`message` 加 `model` / `prompt_tokens` / `completion_tokens` / `reasoning_tokens` 四列（可空，拿不到就 NULL）；流式请求开 `stream_options.include_usage`，用量帧在「空 choices」之前解析；`done` 事件附带 model + 用量供前端当场回填。新增 `GET /api/llm/options` 与配置 `llm.available-models`（默认含 **qwen3.8-flash**——本地 wiki 快照缺它，官方 Chat 文档确认存在）；请求体 `model` 走白名单校验、`thinkingBudget` 校验 1~262144 且思考关着时丢弃；历史 assistant 消息回传 `reasoning_content`（qwen3.8 系 preserve_thinking 默认 true）。界面：输入条加模型 / 思考强度两个选择器（档位 4096/16384/131072 对齐官方 reasoning_effort 映射），助手气泡加用量行。13.1 第 7 条改写、13.2 追加 19~21 条 |
 | 2026-09-24（第九次） | **每用户系统提示词**。`sys_user` 加可空列 `system_prompt`；`CurrentUser` 带上它（AuthInterceptor 本就回表），`ChatService.recentHistory` 在非空时把它作为 system 消息放在历史最前面（不占历史条数名额）；新增 `PUT /api/users/me/system-prompt`（2000 字上限、全空白=清除、不换发 token）；`UserVO` 加 `systemPrompt` 但管理员用户列表恒为 null；前端新增 `SystemPromptDialog` + 顶栏入口，保存后覆盖本地登录态、下一条消息立即生效。接口表 13 个；九加第 17 条、13.2 加第 22 条 |
 | 2026-09-24（第十次） | **前端视觉重做**（参考 ChatGPT / Claude 现行界面）：暖中性纸感配色 + 暗色深墨、内容列居中限宽 760px、助手消息去气泡加头像、用户消息改浅色 pill、顶栏收敛为「标题 + 头像下拉菜单」（新增 `UserMenu.vue`）、合成输入框改胶囊卡片（自动长高 + 圆形发送/停止）、空状态问候语 + 建议 chips、侧边栏品牌标 + hover 浮出操作、登录页光晕背景卡片、全局细滚动条 / 选区 / 焦点环 / 弹窗入场动画。纯样式与模板改动，接口与数据零变化 |
+| 2026-09-24（第十一次） | **联网搜索**。`LlmCallOptions` / `ChatRequest` / `RegenerateRequest` 加 `enableSearch`，OpenAI 兼容请求体在开启时下发 `enable_search: true`（策略固定默认 turbo）；输入条加「联网」pill（默认关、存 localStorage）；Mock 回显「【Mock 联网】」一行。实测：mock 链路开关生效；真实 key 全链路一发请求返回带当天日期的实时天气。13.1 加第 5 条（兼容协议无引用来源）、13.2 加第 23 条（计费与 agent 策略限制） |
 *最后更新：2026-09-24*
 

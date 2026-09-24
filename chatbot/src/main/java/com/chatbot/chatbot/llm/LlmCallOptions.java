@@ -9,6 +9,9 @@ package com.chatbot.chatbot.llm;
  * @param thinkingBudget 思考预算（思维链 token 上限，Chat Completions 的 thinking_budget 参数）；
  *                       null = 不下发，由模型自己决定想多久。上限是各模型的「最大思维链长度」，
  *                       超了百炼会返回 400 并把上限写进错误文案（见 error-code 文档），界面会原样展示
+ * @param enableSearch   联网搜索（Chat Completions 的 enable_search 参数）。true 才下发；
+ *                       搜索策略固定用默认 turbo（qwen3.8 系在兼容协议下不支持 agent），
+ *                       计费约 3 元/千次 + 检索内容带来的输入 token，所以默认关
  */
-public record LlmCallOptions(String model, Boolean enableThinking, Integer thinkingBudget) {
+public record LlmCallOptions(String model, Boolean enableThinking, Integer thinkingBudget, Boolean enableSearch) {
 }

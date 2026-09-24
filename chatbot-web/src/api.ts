@@ -156,6 +156,8 @@ export interface StreamOptions {
   enableThinking?: boolean
   model?: string
   thinkingBudget?: number | null
+  /** 联网搜索：按次计费，所以由界面显式开关控制，不给默认值。 */
+  enableSearch?: boolean
 }
 
 /** done 事件带回来的用量，字段名与后端 JSON 一致（下划线）。 */
@@ -256,6 +258,9 @@ function pickStreamOptions(options: StreamOptions): Record<string, unknown> {
   }
   if (options.thinkingBudget != null) {
     body.thinkingBudget = options.thinkingBudget
+  }
+  if (options.enableSearch !== undefined) {
+    body.enableSearch = options.enableSearch
   }
   return body
 }

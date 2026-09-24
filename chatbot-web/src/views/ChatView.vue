@@ -43,6 +43,10 @@ const selectedModel = ref('')
  * 它既是 qwen3.8 系的默认值，也正好是 qwen3.6-flash 的最大思维链长度，对全部可选模型都合法。
  * 再往上（262144 = xhigh）只有 qwen3.8 系吃得下，qwen3.6-flash 会返回 400，所以不放进档位。
  */
+/** 联网搜索开关：默认关——搜索按次计费（turbo 约 3 元/千次），不该在用户没注意时 silently 花钱。 */
+const searchOn = ref(localStorage.getItem('chatbot.search') === '1')
+watch(searchOn, (v) => localStorage.setItem('chatbot.search', v ? '1' : '0'))
+
 const thinkingBudgetSel = ref('')
 const THINKING_BUDGET_CHOICES: { value: string; label: string }[] = [
   { value: '', label: '思考强度：不限' },
@@ -169,6 +173,7 @@ function streamOptions(): StreamOptions {
     enableThinking: thinkingOn.value,
     model: selectedModel.value || undefined,
     thinkingBudget: thinkingOn.value && thinkingBudgetSel.value ? Number(thinkingBudgetSel.value) : undefined,
+    enableSearch: searchOn.value,
   }
 }
 
@@ -605,6 +610,15 @@ onBeforeUnmount(stopStreaming)
                 <input v-model="thinkingOn" type="checkbox" :disabled="streaming" />
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
                 思考
+              </label>
+              <label
+                class="pill-toggle"
+                :class="{ on: searchOn }"
+                title="联网搜索：模型可检索实时网页内容（天气 / 新闻 / 股价）。按次计费，默认关"
+              >
+                <input v-model="searchOn" type="checkbox" :disabled="streaming" />
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a15 15 0 0 1 0 18" /><path d="M12 3a15 15 0 0 0 0 18" /></svg>
+                联网
               </label>
               <select
                 v-model="selectedModel"

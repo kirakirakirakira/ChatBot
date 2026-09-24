@@ -39,10 +39,15 @@ public class MockLlmClient implements LlmClient {
         }
 
         // 把收到的人设回显一行：没有真实 key 时也能肉眼确认 system prompt 真的进了模型输入
+        // 联网开关也回显一行：没 key 时也能确认开关真的传到了调用层
+        String searched = Boolean.TRUE.equals(options.enableSearch())
+                ? "【Mock 联网】已模拟检索到 3 条网页结果。\n"
+                : "";
         String persona = (systemPrompt == null || systemPrompt.isBlank())
                 ? ""
                 : "【Mock 人设】" + systemPrompt.substring(0, Math.min(30, systemPrompt.length())) + "\n";
         String reply = persona
+                + searched
                 + "【Mock 回复】收到你的消息：「" + lastUser + "」。\n"
                 + "这是本地 Mock 的流式回复。\n"
                 + "在 application.properties 里填写 llm.api-key（百炼 API Key）后，就会切换到真实模型。";

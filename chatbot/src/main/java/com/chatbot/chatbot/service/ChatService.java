@@ -102,7 +102,8 @@ public class ChatService {
         applyAutoTitle(conversation, request.message());
         saveMessage(conversation, Role.USER, request.message(), null);
 
-        LlmCallOptions options = buildOptions(request.enableThinking(), request.model(), null, request.thinkingBudget());
+        LlmCallOptions options = buildOptions(request.enableThinking(), request.model(), null,
+                request.thinkingBudget(), request.enableSearch());
         return startStream(conversation, recentHistory(conversation.getId(), user.systemPrompt()), options);
     }
 
@@ -123,7 +124,8 @@ public class ChatService {
                 (request == null) ? null : request.enableThinking(),
                 requestedModel,
                 null,
-                (request == null) ? null : request.thinkingBudget());
+                (request == null) ? null : request.thinkingBudget(),
+                (request == null) ? null : request.enableSearch());
         return startStream(conversation, recentHistory(conversation.getId(), user.systemPrompt()), options);
     }
 
@@ -135,7 +137,7 @@ public class ChatService {
      * @param fallbackModel requestedModel 为空时的次选（重新生成时是被删回答的模型），再空才用 llm.model
      */
     private LlmCallOptions buildOptions(Boolean enableThinking, String requestedModel,
-                                        String fallbackModel, Integer thinkingBudget) {
+                                        String fallbackModel, Integer thinkingBudget, Boolean enableSearch) {
         Boolean effectiveThinking = (enableThinking != null) ? enableThinking : llmProperties.enableThinking();
         String model = resolveModel(requestedModel, fallbackModel);
         Integer budget = null;
@@ -146,7 +148,7 @@ public class ChatService {
             }
             budget = thinkingBudget;
         }
-        return new LlmCallOptions(model, enableThinking, budget);
+        return new LlmCallOptions(model, enableThinking, budget, enableSearch);
     }
 
     /**
