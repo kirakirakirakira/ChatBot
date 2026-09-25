@@ -4,6 +4,7 @@ import com.chatbot.chatbot.auth.Roles;
 import com.chatbot.chatbot.auth.UserStatus;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 /**
  * 用户管理界面里「角色 / 状态」筛选器和下拉框的数据源。
@@ -23,10 +24,17 @@ public record UserAdminOptionsVO(List<Option> roles, List<Option> statuses) {
     public record Option(int code, String label) {
     }
 
-    public static UserAdminOptionsVO defaults() {
-        return new UserAdminOptionsVO(
-                List.of(new Option(Roles.USER, Roles.label(Roles.USER)),
-                        new Option(Roles.ADMIN, Roles.label(Roles.ADMIN))),
+    /**
+     * @param actorRank 当前操作者的管理层级。roles 只返回**层级严格低于操作者**的角色：
+     *                  管理员拿不到「管理员 / 超级管理员」选项，超级管理员拿不到「超级管理员」。
+     *                  下拉里根本没有的选项，比「选了才告诉你不行」干净。
+     */
+    public static UserAdminOptionsVO forActor(Integer actorRank) {
+        List<Option> roles = Roles.knownByRankDesc().stream()
+                .filter(code -> actorRank != null && Roles.rank(code) < actorRank)
+                .map(code -> new Option(code, Roles.label(code)))
+                .collect(Collectors.toList());
+        return new UserAdminOptionsVO(roles,
                 List.of(new Option(UserStatus.ENABLED, UserStatus.label(UserStatus.ENABLED)),
                         new Option(UserStatus.DISABLED, UserStatus.label(UserStatus.DISABLED))));
     }

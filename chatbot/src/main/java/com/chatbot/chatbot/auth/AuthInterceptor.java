@@ -16,6 +16,8 @@ import java.time.ZoneId;
 /**
  * 登录拦截器：除登录接口外，/api/** 一律要求合法的 Authorization: Bearer token。
  * 401=未登录/登录失效、403=权限不足，统一由 GlobalExceptionHandler 转成 ErrorResponse JSON。
+ * {@code @RequireAdmin} 的判定是「管理员或超级管理员」（Roles.canAccessAdmin）；
+ * 进门之后「谁能管谁」由 AdminUserService 的层级规则再算一层。
  */
 @Component
 public class AuthInterceptor implements HandlerInterceptor {

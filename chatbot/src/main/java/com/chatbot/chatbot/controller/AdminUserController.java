@@ -62,14 +62,15 @@ public class AdminUserController {
                                     @RequestParam(name = "role", required = false) Integer role,
                                     @RequestParam(name = "status", required = false) Integer status,
                                     @RequestParam(name = "page", required = false) Integer page,
-                                    @RequestParam(name = "size", required = false) Integer size) {
-        return adminUserService.search(keyword, role, status, page, size);
+                                    @RequestParam(name = "size", required = false) Integer size,
+                                    CurrentUser currentUser) {
+        return adminUserService.search(currentUser, keyword, role, status, page, size);
     }
 
     /** 角色 / 状态的可选值，给筛选器和下拉框用；中文标签由后端下发，前端不维护映射。 */
     @GetMapping("/options")
-    public UserAdminOptionsVO options() {
-        return adminUserService.options();
+    public UserAdminOptionsVO options(CurrentUser currentUser) {
+        return adminUserService.options(currentUser);
     }
 
     @PostMapping

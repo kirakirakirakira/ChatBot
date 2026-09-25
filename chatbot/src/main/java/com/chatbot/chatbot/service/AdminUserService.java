@@ -64,11 +64,7 @@ public class AdminUserService {
     /** SecureRandom 实例本身线程安全，共享一个省掉每次重置密码都重新播种的开销。 */
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    /**
-     * 合法 role / status 取值，直接引用 Roles / UserStatus 的常量而不是写 0、1：
-     * 以后加角色只改常量类，这里的校验和 options 下拉自动跟着变。
-     */
-    private static final Set<Integer> KNOWN_ROLES = Set.of(Roles.USER, Roles.ADMIN);
+    /** 合法 status 取值，直接引用 UserStatus 的常量而不是写 0、1。角色合法性走 Roles.isKnown()（层级模型）。 */
     private static final Set<Integer> KNOWN_STATUSES = Set.of(UserStatus.ENABLED, UserStatus.DISABLED);
 
     private final UserRepository userRepository;
@@ -97,15 +93,16 @@ public class AdminUserService {
      * 分页参数越界报 400 而不是像消息列表那样静默收敛：那边是聊天翻页、参数错了不该打断阅读，
      * 这边是管理界面，页码写错还悄悄返回第 0 页会让人以为「筛选没生效」。
      */
-    public PageVO<AdminUserVO> search(String keyword, Integer role, Integer status, Integer page, Integer size) {
+    public PageVO<AdminUserVO> search(CurrentUser actor, String keyword, Integer role, Integer status, Integer page, Integer size) {
         Pageable pageable = pageable(page, size);
         Page<User> result = userRepository.findAll(UserSpecifications.search(keyword, role, status), pageable);
-        return PageVO.of(result, AdminUserVO::from);
+        // canManage 按操作者层级算：前端据此禁用行内控件，「能不能点」在打开页面时就知道，不用点了才吃 400
+        return PageVO.of(result, user -> AdminUserVO.from(user, actor.rank()));
     }
 
-    /** 角色 / 状态下拉的数据源，中文标签由 Roles.label / UserStatus.label 生成。 */
-    public UserAdminOptionsVO options() {
-        return UserAdminOptionsVO.defaults();
+    /** 角色 / 状态下拉的数据源。角色只返回层级低于操作者的那些（见 UserAdminOptionsVO.forActor）。 */
+    public UserAdminOptionsVO options(CurrentUser actor) {
+        return UserAdminOptionsVO.forActor(actor.rank());
     }
 
     /**
@@ -120,6 +117,7 @@ public class AdminUserService {
         int status = (request.status() == null) ? UserStatus.ENABLED : request.status();
         requireKnownRole(role);
         requireKnownStatus(status);
+        requireAssignableRole(actor, role);
         if (userRepository.findByUsername(username).isPresent()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "用户名已存在: " + username);
         }
@@ -135,7 +133,7 @@ public class AdminUserService {
         // 审计与业务同事务：建号失败回滚时这条留痕一起回滚，不留假记录
         adminAuditService.record(actor, AuditAction.CREATE_USER, saved.getId(), saved.getUsername(),
                 "role=" + role + ", status=" + status);
-        return AdminUserVO.from(saved);
+        return AdminUserVO.from(saved, actor.rank());
     }
 
     /** 改角色。可以升级也可以降级，唯一不许的是「把自己从管理员降下去」和「降掉最后一个启用的管理员」。 */
@@ -145,15 +143,18 @@ public class AdminUserService {
         User user = requireUser(id);
         int oldRole = user.getRole();
         boolean demotingAdmin = Roles.isAdmin(user.getRole()) && !Roles.isAdmin(request.role());
-        if (isSelf(actor, id) && demotingAdmin) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能取消自己的管理员角色");
+        if (isSelf(actor, id)) {
+            // 自己的角色在界面上是锁死的（select disabled），这里再兜一道：绕过界面直接调接口也改不了
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能修改自己的角色");
         }
-        // 只有「启用的管理员」才算数：已经被禁用的管理员本来就进不来，不该占着最后一个名额
+        requireCanManage(actor, user);
+        requireAssignableRole(actor, request.role());
+        // 只有「启用的管理者」才算数：已经被禁用的管理者本来就进不来，不该占着最后一个名额
         if (demotingAdmin && UserStatus.isEnabled(user.getStatus())) {
-            requireAnotherEnabledAdmin();
+            requireNotLastEnabledManager(user);
         }
         user.setRole(request.role());
-        AdminUserVO updated = AdminUserVO.from(userRepository.save(user));
+        AdminUserVO updated = AdminUserVO.from(userRepository.save(user), actor.rank());
         adminAuditService.record(actor, AuditAction.UPDATE_ROLE, user.getId(), user.getUsername(),
                 "role " + oldRole + " → " + request.role());
         return updated;
@@ -171,13 +172,14 @@ public class AdminUserService {
         if (isSelf(actor, id)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能修改自己的账号状态");
         }
-        boolean disablingAdmin = !UserStatus.isEnabled(request.status())
-                && Roles.isAdmin(user.getRole()) && UserStatus.isEnabled(user.getStatus());
-        if (disablingAdmin) {
-            requireAnotherEnabledAdmin();
+        requireCanManage(actor, user);
+        boolean disablingManager = !UserStatus.isEnabled(request.status())
+                && Roles.canAccessAdmin(user.getRole()) && UserStatus.isEnabled(user.getStatus());
+        if (disablingManager) {
+            requireNotLastEnabledManager(user);
         }
         user.setStatus(request.status());
-        AdminUserVO updated = AdminUserVO.from(userRepository.save(user));
+        AdminUserVO updated = AdminUserVO.from(userRepository.save(user), actor.rank());
         adminAuditService.record(actor, AuditAction.UPDATE_STATUS, user.getId(), user.getUsername(),
                 "status " + oldStatus + " → " + request.status());
         return updated;
@@ -196,6 +198,7 @@ public class AdminUserService {
         if (isSelf(actor, id)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能重置自己的密码，请用「修改密码」");
         }
+        requireCanManage(actor, user);
         boolean generate = Boolean.TRUE.equals(request.generate());
         String plainPassword = generate ? generatePassword() : requireExplicitPassword(request.newPassword());
         user.setPassword(passwordEncoder.encode(plainPassword));
@@ -219,6 +222,7 @@ public class AdminUserService {
         if (isSelf(actor, id)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能对自己强制下线");
         }
+        requireCanManage(actor, user);
         user.setPasswordChangedAt(LocalDateTime.now());
         userRepository.save(user);
         adminAuditService.record(actor, AuditAction.REVOKE_SESSIONS, user.getId(), user.getUsername(),
@@ -238,9 +242,8 @@ public class AdminUserService {
         if (isSelf(actor, id)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能删除自己");
         }
-        if (Roles.isAdmin(user.getRole()) && UserStatus.isEnabled(user.getStatus())) {
-            requireAnotherEnabledAdmin();
-        }
+        requireCanManage(actor, user);
+        requireNotLastEnabledManager(user);
         // 删除顺序不能换：fk_attachment_conversation / fk_message_conversation / fk_conversation_owner
         // 都是 RESTRICT，先删父行会直接撞 errno 1451。和 ConversationService.delete 是同一套顺序，
         // 只是这里按 owner 一次删完，不用逐个会话循环。
@@ -273,8 +276,28 @@ public class AdminUserService {
     }
 
     private static void requireKnownRole(Integer role) {
-        if (role == null || !KNOWN_ROLES.contains(role)) {
+        if (!Roles.isKnown(role)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "未知角色: " + role);
+        }
+    }
+
+    /**
+     * 层级规则的核心：只能管理层级**严格低于**自己的用户。
+     * 管理员因此碰不到管理员 / 超级管理员，超级管理员碰不到超级管理员（含自己）。
+     * 自己的行另有 isSelf 的专门文案（界面也把控件锁死），所以这里不包含「等于自己」的情况。
+     */
+    private static void requireCanManage(CurrentUser actor, User target) {
+        if (Roles.rank(target.getRole()) >= actor.rank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "只能管理层级低于自己的用户：对方是「" + Roles.label(target.getRole()) + "」");
+        }
+    }
+
+    /** 建号 / 改角色时，目标角色必须严格低于操作者：不能造一个和自己平级或更高的账号出来。 */
+    private static void requireAssignableRole(CurrentUser actor, Integer role) {
+        if (Roles.rank(role) >= actor.rank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "不能设置「" + Roles.label(role) + "」：不能创建或指派层级不低于自己的角色");
         }
     }
 
@@ -285,13 +308,24 @@ public class AdminUserService {
     }
 
     /**
-     * 「至少留一个启用的管理员」这道闸。判定用 count 而不是「除了他还有没有别人」：
-     * 前者一条 SQL 就能算，也不用把管理员名单拉进内存。
+     * 「系统不能失去管理者」这道闸，两层：
+     * ① 启用的管理者（管理员+超级管理员）至少留一个，否则没人能再进管理端；
+     * ② 启用的超级管理员至少留一个，否则没人能再创建 / 提升管理员（层级规则下管理员管不到管理员）。
+     * 判定用 count 而不是「除了他还有没有别人」：一条 SQL 就能算，不用把名单拉进内存。
      * <=1 而不是 ==0：此刻目标用户自己还在计数里，他就是那 1 个。
      */
-    private void requireAnotherEnabledAdmin() {
-        if (userRepository.countByRoleAndStatus(Roles.ADMIN, UserStatus.ENABLED) <= 1) {
+    private void requireNotLastEnabledManager(User target) {
+        if (!Roles.canAccessAdmin(target.getRole()) || !UserStatus.isEnabled(target.getStatus())) {
+            return;
+        }
+        long enabledManagers = userRepository.countByRoleAndStatus(Roles.ADMIN, UserStatus.ENABLED)
+                + userRepository.countByRoleAndStatus(Roles.SUPER_ADMIN, UserStatus.ENABLED);
+        if (enabledManagers <= 1) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "系统至少需要保留一个启用的管理员");
+        }
+        if (Roles.isSuperAdmin(target.getRole())
+                && userRepository.countByRoleAndStatus(Roles.SUPER_ADMIN, UserStatus.ENABLED) <= 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "系统至少需要保留一个启用的超级管理员");
         }
     }
 

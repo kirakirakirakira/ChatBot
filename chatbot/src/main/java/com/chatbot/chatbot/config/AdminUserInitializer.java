@@ -43,10 +43,12 @@ public class AdminUserInitializer implements ApplicationRunner {
         User admin = new User();
         admin.setUsername(authProperties.defaultAdminUsername());
         admin.setPassword(passwordEncoder.encode(authProperties.defaultAdminPassword()));
-        admin.setRole(Roles.ADMIN);
+        // 种子账号必须是**超级管理员**：层级规则下管理员管不到管理员，
+        // 若种子只是管理员，系统将永远无法创建 / 提升出超级管理员
+        admin.setRole(Roles.SUPER_ADMIN);
         userRepository.save(admin);
         // 故意不把密码打进日志：日志会被收集和转发，密码不该出现在里面
-        log.warn("sys_user 表为空，已创建初始管理员账号「{}」（密码取自 auth.default-admin-password，默认 admin），"
+        log.warn("sys_user 表为空，已创建初始**超级管理员**账号「{}」（密码取自 auth.default-admin-password，默认 admin），"
                 + "请登录后立即修改", admin.getUsername());
     }
 }

@@ -11,7 +11,8 @@ USE chatbot;
 
 -- 用户（登录 + 角色），对应实体 com.chatbot.chatbot.entity.User。
 -- password 存 BCrypt 哈希（固定 60 字符），任何情况下都不存明文。
--- role 用数字：0=普通用户，1=管理员，取值定义在 com.chatbot.chatbot.auth.Roles；以后加角色不用改表结构。
+-- role 用数字：0=普通用户，1=管理员，2=超级管理员，3=访客，取值定义在 com.chatbot.chatbot.auth.Roles；以后加角色不用改表结构。
+--   角色是层级模型（Roles.rank）：超级管理员 > 管理员 > 普通用户 > 访客，管理操作只允许「上对下」。
 -- status 用数字：0=启用，1=禁用，取值定义在 com.chatbot.chatbot.auth.UserStatus；禁用登录 403、已登录的下一个请求 401。
 -- password_changed_at 为 NULL 表示从没改过密码；签发时间（token 的 iat）早于它的登录态一律作废。
 --   这列必须保持 datetime(6)：后端按毫秒比较 iat 和它，精度掉到秒会让改密码那一秒签发的旧 token 躲过失效判断。
@@ -111,10 +112,11 @@ CREATE TABLE IF NOT EXISTS `admin_audit_log` (
   KEY `idx_audit_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- 初始管理员：admin / admin（下面是字符串 admin 的 BCrypt 哈希，cost=10）。
+-- 初始**超级管理员**：admin / admin（下面是字符串 admin 的 BCrypt 哈希，cost=10），role=2。
+-- 必须是超级管理员：层级规则下管理员管不到管理员，种子若只是管理员将永远造不出超级管理员。
 -- INSERT IGNORE + username 唯一索引保证脚本可重复执行，也不会把改过的密码覆盖回 admin。登录后请立刻换掉这个默认密码。
 INSERT IGNORE INTO `sys_user` (`username`, `password`, `role`, `created_at`)
-VALUES ('admin', '$2a$10$lN0TQaxdLsYVpQ9wDx5OB.cucn20byv6DYaSmL32FvvtzDZWlEpmi', 1, NOW(6));
+VALUES ('admin', '$2a$10$lN0TQaxdLsYVpQ9wDx5OB.cucn20byv6DYaSmL32FvvtzDZWlEpmi', 2, NOW(6));
 
 -- ===== 已有库升级：2026-09-24「会话按用户隔离」 =====
 -- 全新库不用看这段，上面的 CREATE TABLE 已经是新结构。
@@ -159,6 +161,12 @@ VALUES ('admin', '$2a$10$lN0TQaxdLsYVpQ9wDx5OB.cucn20byv6DYaSmL32FvvtzDZWlEpmi',
 --     ADD COLUMN `last_login_at`        datetime(6) DEFAULT NULL AFTER `password_changed_at`,
 --     ADD COLUMN `must_change_password` tinyint(1)  NOT NULL DEFAULT 0 AFTER `last_login_at`;
 
+-- ===== 已有库升级：2026-09-25「角色层级（超级管理员 / 访客）」 =====
+-- sys_user.role 是 int，加角色**不需要改列**；但老库里没有超级管理员，而「创建 / 提升管理员」只有超级管理员能做，
+-- 所以必须手工把初始账号提升一档，否则系统最高只有管理员、将永远造不出超级管理员：
+--   UPDATE sys_user SET role = 2 WHERE id = (SELECT t.id FROM (SELECT MIN(id) AS id FROM sys_user) t);
+-- （只提升最早那个账号；要提升别人请自行改 WHERE 条件。访客档是新增的可选项，老库不用动。）
+--
 -- 备注：
 -- 1) message.role 的取值集合由 Role 枚举决定（Hibernate 按字母序生成）。以后给 Role 加新值（例如 SYSTEM）时，
 --    已存在的库不会自动变更列类型，需要手工执行：

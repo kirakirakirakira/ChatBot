@@ -10,9 +10,11 @@
 import { computed, ref } from 'vue'
 import type { CurrentUser } from '@/types'
 
-/** 与后端 com.chatbot.chatbot.auth.Roles 保持一致：0=普通用户，1=管理员。 */
+/** 与后端 com.chatbot.chatbot.auth.Roles 保持一致：0=普通用户，1=管理员，2=超级管理员，3=访客。 */
 export const ROLE_USER = 0
 export const ROLE_ADMIN = 1
+export const ROLE_SUPER_ADMIN = 2
+export const ROLE_GUEST = 3
 
 const TOKEN_KEY = 'chatbot.token'
 const USER_KEY = 'chatbot.user'
@@ -38,7 +40,10 @@ export const currentUser = ref<CurrentUser | null>(readStoredUser())
  * 由 App.vue 启动时调 /api/auth/me 确认（过期/被作废会 401，然后 clearSession）。
  */
 export const isAuthenticated = computed(() => token.value !== null)
-export const isAdmin = computed(() => currentUser.value?.role === ROLE_ADMIN)
+/** 管理端准入：管理员**或超级管理员**（与后端 Roles.canAccessAdmin 同一口径）。 */
+export const isAdmin = computed(() => currentUser.value?.role === ROLE_ADMIN || currentUser.value?.role === ROLE_SUPER_ADMIN)
+
+export const isSuperAdmin = computed(() => currentUser.value?.role === ROLE_SUPER_ADMIN)
 
 export function setSession(newToken: string, user: CurrentUser): void {
   token.value = newToken

@@ -25,11 +25,17 @@ public record AdminUserVO(
         String statusLabel,
         LocalDateTime lastLoginAt,
         Boolean mustChangePassword,
-        LocalDateTime createdAt) {
+        LocalDateTime createdAt,
+        Boolean canManage) {
 
-    public static AdminUserVO from(User user) {
+    /**
+     * @param actorRank 当前操作者的管理层级（{@code CurrentUser.rank()}）。传 null 表示不算层级（不应发生）。
+     * canManage = 目标层级严格低于操作者：前端据此**禁用**行内控件，而不是「看起来能点、点了才 400」。
+     */
+    public static AdminUserVO from(User user, Integer actorRank) {
+        boolean canManage = actorRank != null && Roles.rank(user.getRole()) < actorRank;
         return new AdminUserVO(user.getId(), user.getUsername(), user.getRole(), Roles.label(user.getRole()),
                 user.getStatus(), UserStatus.label(user.getStatus()), user.getLastLoginAt(),
-                Boolean.TRUE.equals(user.getMustChangePassword()), user.getCreatedAt());
+                Boolean.TRUE.equals(user.getMustChangePassword()), user.getCreatedAt(), canManage);
     }
 }

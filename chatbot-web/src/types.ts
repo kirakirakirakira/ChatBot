@@ -110,7 +110,7 @@ export interface UiMessage {
 export interface CurrentUser {
   id: number
   username: string
-  /** 0=普通用户，1=管理员，见后端 com.chatbot.chatbot.auth.Roles。 */
+  /** 0=普通用户，1=管理员，2=超级管理员，3=访客；层级见后端 Roles.rank。 */
   role: number
   /** 后端给的中文角色名，直接展示，前端不用再维护一份映射。 */
   roleLabel: string
@@ -149,6 +149,11 @@ export interface AdminUser {
   /** 管理员重置过密码、本人还没改。 */
   mustChangePassword: boolean
   createdAt: string
+  /**
+   * 当前登录的管理者**能不能操作这一行**（后端按层级算：目标层级严格低于操作者才为 true）。
+   * 界面据此直接禁用控件——「能不能点」打开页面就知道，而不是点了才吃一个 400。
+   */
+  canManage: boolean
 }
 
 /**

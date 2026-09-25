@@ -11,7 +11,7 @@ import {
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import ResetPasswordDialog from '@/components/admin/ResetPasswordDialog.vue'
 import UserFormDialog from '@/components/admin/UserFormDialog.vue'
-import { ROLE_ADMIN } from '@/auth'
+import { ROLE_ADMIN, ROLE_GUEST, ROLE_SUPER_ADMIN, currentUser } from '@/auth'
 import type { AdminUser, UserAdminOptions } from '@/types'
 
 /**
@@ -35,6 +35,38 @@ const statusSel = ref('')
 const page = ref(0)
 const total = ref(0)
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+
+/** 自己的 id：自己的行所有控件锁死（需求明确要求「不能改自己的角色」要锁按键，而不是点了才报错）。 */
+const myId = computed(() => currentUser.value?.id ?? -1)
+
+/** 行内控件是否锁死：层级不低于我（canManage=false）、或者就是我自己。 */
+function rowLocked(u: AdminUser): boolean {
+  return !u.canManage || u.id === myId.value
+}
+
+function lockTitle(u: AdminUser): string {
+  if (u.id === myId.value) {
+    return '不能修改自己的角色与信息'
+  }
+  if (!u.canManage) {
+    return '只能管理层级低于自己的用户'
+  }
+  return ''
+}
+
+/** 角色标签配色：超管最重、管理员次之、访客最淡；禁用态 .off 优先级最高。 */
+function roleTagClass(u: AdminUser): string {
+  if (u.role === ROLE_SUPER_ADMIN) {
+    return 'super'
+  }
+  if (u.role === ROLE_ADMIN) {
+    return 'admin'
+  }
+  if (u.role === ROLE_GUEST) {
+    return 'guest'
+  }
+  return ''
+}
 
 const showCreate = ref(false)
 const resetTarget = ref<AdminUser | null>(null)
@@ -251,29 +283,40 @@ function formatTime(iso: string | null): string {
           <td class="num">{{ u.id }}</td>
           <td>
             <span class="uname">{{ u.username }}</span>
+            <span v-if="u.id === myId" class="flag self" title="这是你自己：角色与信息都锁死">我</span>
             <span v-if="u.mustChangePassword" class="flag" title="管理员重置过密码，本人还没改">待改密</span>
           </td>
           <td>
+            <!-- 锁死的行不渲染 select：下拉选项已按「只能指派低于自己的角色」过滤，
+                 里面根本没有这一行的当前角色，硬渲染会得到一个空白框。纯文本标签才是它该有的样子。 -->
             <select
+              v-if="!rowLocked(u)"
               class="field-input inline"
               :value="String(u.role)"
               @change="onRoleChange(u, Number(($event.target as HTMLSelectElement).value))"
             >
               <option v-for="r in options?.roles ?? []" :key="r.code" :value="String(r.code)">{{ r.label }}</option>
             </select>
+            <span v-else class="role-plain" :title="lockTitle(u)">{{ u.roleLabel }}</span>
           </td>
           <td>
-            <span class="role-tag" :class="{ off: u.status !== 0 }">{{ u.statusLabel }}</span>
-            <button class="btn-ghost mini" type="button" @click="toggleStatus(u)">
+            <span class="role-tag" :class="[roleTagClass(u), { off: u.status !== 0 }]">{{ u.statusLabel }}</span>
+            <button
+              class="btn-ghost mini"
+              type="button"
+              :disabled="rowLocked(u)"
+              :title="lockTitle(u)"
+              @click="toggleStatus(u)"
+            >
               {{ u.status === 0 ? '禁用' : '启用' }}
             </button>
           </td>
           <td class="muted">{{ formatTime(u.lastLoginAt) }}</td>
           <td class="muted">{{ formatTime(u.createdAt) }}</td>
           <td class="col-actions">
-            <button class="btn-ghost mini" type="button" @click="resetTarget = u">重置密码</button>
-            <button class="btn-ghost mini" type="button" @click="confirmState = { kind: 'revoke', user: u }">强制下线</button>
-            <button class="btn-ghost mini danger" type="button" @click="confirmState = { kind: 'delete', user: u }">删除</button>
+            <button class="btn-ghost mini" type="button" :disabled="rowLocked(u)" :title="lockTitle(u)" @click="resetTarget = u">重置密码</button>
+            <button class="btn-ghost mini" type="button" :disabled="rowLocked(u)" :title="lockTitle(u)" @click="confirmState = { kind: 'revoke', user: u }">强制下线</button>
+            <button class="btn-ghost mini danger" type="button" :disabled="rowLocked(u)" :title="lockTitle(u)" @click="confirmState = { kind: 'delete', user: u }">删除</button>
           </td>
         </tr>
         <tr v-if="users.length === 0">
@@ -405,6 +448,11 @@ function formatTime(iso: string | null): string {
   font-size: 11px;
 }
 
+.role-plain {
+  font-size: 12.5px;
+  color: var(--text-muted);
+}
+
 .field-input.inline {
   width: 108px;
   padding: 4px 8px;
@@ -417,9 +465,32 @@ function formatTime(iso: string | null): string {
   padding: 1px 8px;
   border-radius: var(--radius-pill);
   font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.role-tag.admin {
   background: var(--accent-soft);
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
   color: var(--accent);
+}
+
+.role-tag.super {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.role-tag.guest {
+  border-style: dashed;
+}
+
+.flag.self {
+  background: var(--panel-2);
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 
 .role-tag.off {

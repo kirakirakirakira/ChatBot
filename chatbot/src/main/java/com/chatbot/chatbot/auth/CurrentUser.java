@@ -11,7 +11,20 @@ package com.chatbot.chatbot.auth;
  */
 public record CurrentUser(Long id, String username, Integer role, String systemPrompt) {
 
+    /**
+     * 管理端准入：管理员**或超级管理员**（{@code @RequireAdmin} 的判定口径）。
+     * 方法名保留 isAdmin 是因为拦截器与前端到处在用；「是不是恰好管理员这一档」用 {@link Roles#isAdmin(Integer)}。
+     */
     public boolean isAdmin() {
-        return Roles.isAdmin(role);
+        return Roles.canAccessAdmin(role);
+    }
+
+    public boolean isSuperAdmin() {
+        return Roles.isSuperAdmin(role);
+    }
+
+    /** 自己的管理层级：service 里做「只能上对下」比较时用。 */
+    public int rank() {
+        return Roles.rank(role);
     }
 }

@@ -34,7 +34,7 @@
 | 数据库 | MySQL 8，库名 `chatbot`，共 **4 张表**：`sys_user` / `conversation` / `message` / `attachment`（图片字节直接存 LONGBLOB） |
 | LLM | `llm.api-key` 有值 → `OpenAiCompatibleLlmClient`；为空 → `MockLlmClient`（本地假回复，链路照样能跑通） |
 | 鉴权 | 自签 HMAC-SHA256 token（不用 JWT 库、不用 Spring Security starter），白名单**只有** `POST /api/auth/login` |
-| 默认账号 | `admin` / `admin`（`sql/init.sql` 的 `INSERT IGNORE` 与 `AdminUserInitializer` 二选一兜底创建） |
+| 默认账号 | `admin` / `admin`，**超级管理员**（`sql/init.sql` 的 `INSERT IGNORE` 与 `AdminUserInitializer` 二选一兜底创建；种子必须是超管，理由见 8.6） |
 
 **本项目刻意没有的东西**（找不到不是你没找到，是真的没有）：
 
@@ -162,7 +162,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `CurrentUser.java` | record `(Long id, String username, Integer role)` + `isAdmin()`。**刻意不用 ThreadLocal**：`/chat` 是 SSE 异步接口，请求线程与生成线程不是同一个。 |
 | `CurrentUserArgumentResolver.java` | `HandlerMethodArgumentResolver`，让控制器方法直接声明 `CurrentUser` 形参。从 request attribute 取；取不到抛 401（兜底，正常走不到）。 |
 | `RequireAdmin.java` | 注解，`@Target({TYPE, METHOD})` + `RUNTIME`。权限判断统一在 `AuthInterceptor`，不在业务层重复。 |
-| `Roles.java` | 角色常量：`USER = 0`、`ADMIN = 1`；`isAdmin(Integer)`；`label(Integer)` 返回中文名（管理员/普通用户）。`sys_user.role` 存 **int 而非字符串/ENUM**，以后加角色不用改列类型。 |
+| `Roles.java` | 角色常量 + **层级模型**：`USER=0`、`ADMIN=1`、`SUPER_ADMIN=2`、`GUEST=3`（访客：应用内权限同普通用户，只是层级最低，作「降权但不禁用」的承接位）；`rank(Integer)` 给管理层级（超管 3 > 管理员 2 > 普通用户 1 > 访客 0，**与 code 解耦**），`canAccessAdmin()` 是 `@RequireAdmin` 的判定（管理员或超管），`knownByRankDesc()` / `isKnown()` / `label()`。`sys_user.role` 存 **int 而非字符串/ENUM**，加角色不用改列类型。 |
 | `UserStatus.java` | 账号状态常量：`ENABLED = 0`、`DISABLED = 1`；`isEnabled(Integer)`（null 当启用，只是防御性兜底）、`label(Integer)`。与 `Roles` 同一口径：存 int 不改列类型，以后加「锁定 / 待激活」不用迁移。2026-09-25 加入。 |
 
 **config/ — 装配与全局行为**
@@ -200,7 +200,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `AttachmentVO.java` | `(id, mime, fileName, size)`：附件元信息，**不含字节**。上传接口的响应、`MessageVO.attachments` 的元素都是它；字节另走 `GET /api/attachments/{id}` |
 | `ChatEvent.java` | SSE 事件体 `(type, content, messageId, model, promptTokens, completionTokens, reasoningTokens)` + `@JsonInclude(NON_NULL)`。静态工厂：`reasoning(content)` / `delta(content)` / `done(saved)`（把入库消息的模型与用量一起带上）/ `error(content)`。**错误文案在 `content`，不是 `message` 字段。** |
 | `UserVO.java` | `(id, username, role, roleLabel, systemPrompt, createdAt, mustChangePassword)`。**没有 password 字段**：BCrypt 哈希也不能出网。`roleLabel` / `statusLabel` 由后端 `Roles.label()` / `UserStatus.label()` 给出，前端不维护映射。`mustChangePassword` 是给「刚认证的这个会话」的指令（登录与 `/me` 都带）。 |
-| `AdminUserVO.java` 等 9 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword`，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult` / `AdminAuditLogVO`（审计行，`actionLabel` 中文由 `AuditAction.label()` 给）。 |
+| `AdminUserVO.java` 等 9 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword` / **`canManage`（当前操作者能不能管这一行，前端据此锁控件）**，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult` / `AdminAuditLogVO`（审计行，`actionLabel` 中文由 `AuditAction.label()` 给）。 |
 | `ConversationVO.java` | `(id, title, createdAt, updatedAt)` |
 | `MessageVO.java` | `(id, role小写字符串, content, reasoning, model, promptTokens, completionTokens, reasoningTokens, attachments, createdAt)`。`attachments` 是 `List<AttachmentVO>`，**没图时传 null 而不是空数组**（NON_NULL 会把整个字段省掉）。record 上 `@JsonInclude(NON_NULL)`：没有的字段干脆不下发 |
 | `RenameConversationRequest.java` | `(title)`，`@NotBlank` + `@Size(max=100)`（100 是 `conversation.title` 列宽） |
@@ -375,7 +375,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `components/icons/IconChat.vue` | 小 | 模块导航图标：24×24 描边、`stroke=currentColor`，颜色由导航条 CSS 决定。新模块照这个规格加一个 SFC，经 `markRaw()` 放进路由 meta（不 markRaw 会被 reactive 代理，白白增加开销）。 |
 | `views/ForbiddenView.vue` | 小 | `/403`：已登录但权限不够。显示当前角色 + 「回到聊天」。挂在外壳里，所以还能用导航条去别的模块，不至于困在死页上。 |
 | `views/NotFoundView.vue` | 小 | `/:pathMatch(.*)*` 兜底，同样挂在外壳里：登录状态下打错地址还能点导航回去，不用手改 URL。 |
-| `auth.ts` | 小 | 登录态。导出 `ROLE_USER=0`/`ROLE_ADMIN=1`（与后端 `Roles` 对齐）、`token`/`currentUser`（模块级 `ref`，初值读 `localStorage` 的 `chatbot.token`/`chatbot.user`）、`isAuthenticated`/`isAdmin`（`computed`）、`setSession(token,user)`、`clearSession()`。`readStoredUser()` 对 JSON 解析失败返回 null（存坏了就当没登录）。**本文件不要 import api.ts**，否则和 `api.ts → auth.ts` 形成循环依赖。 |
+| `auth.ts` | 小 | 登录态。导出 `ROLE_USER=0`/`ROLE_ADMIN=1`/`ROLE_SUPER_ADMIN=2`/`ROLE_GUEST=3`（与后端 `Roles` 对齐）；`isAdmin` 是**管理端准入**（管理员或超管，同后端 `canAccessAdmin`），另有 `isSuperAdmin`、`token`/`currentUser`（模块级 `ref`，初值读 `localStorage` 的 `chatbot.token`/`chatbot.user`）、`isAuthenticated`/`isAdmin`（`computed`）、`setSession(token,user)`、`clearSession()`。`readStoredUser()` 对 JSON 解析失败返回 null（存坏了就当没登录）。**本文件不要 import api.ts**，否则和 `api.ts → auth.ts` 形成循环依赖。 |
 | `api/client.ts` | 小 | **全站唯一的 HTTP 传输层**（2026-09-25 从 `api.ts` 抽出）。导出 `API_BASE='/api'`、`request<T>(path, init)`、`withAuth(headers?)`、`extractErrorMessage(response)`。`request()` 的口径：挂 `Authorization: Bearer`、非 2xx 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（界面随即弹回登录页）、204 返回 `undefined`。抽出来的理由：项目要长出一批和聊天**平级的功能模块**，每个模块一个 api 文件互不干扰，但「挂鉴权头 + 401 清登录态」只能有一份实现，否则某个模块自己写 fetch 忘了处理 401，界面就会停在一张点什么都 401 的死页面上。**依赖方向刻意单向 `client.ts → auth.ts`**：本文件不 import router——反向 import 会形成 `router → guards → api → client → router` 的环，ESM 下表现为某个绑定初始化时还是 `undefined`，很难查。「掉登录态就回登录页」的兜底放在 `App.vue`，因为那条路径不止 401 一个入口（还有主动退出登录），兜底要兜在一个口子上。 |
 | `api/userAdmin.ts` | 小 | 用户管理模块的后端调用：`listAdminUsers` / `fetchUserAdminOptions` / `createAdminUser` / `updateUserRole` / `updateUserStatus` / `resetAdminUserPassword` / `revokeAdminUserSessions` / `deleteAdminUser` / `listAdminAudit`。传输层仍只用 `api/client.ts` 的 `request()`。 |
 | `api.ts` | 中 | **聊天与登录的接口清单**：只描述「有哪些接口、请求体和响应长什么样」，传输层在 `api/client.ts`。新增别的平级模块另开 `src/api/<模块>.ts`（见 `api/userAdmin.ts`）。导出：`login`、`fetchMe`、`changePassword`、`createConversation`、`listConversations`、`getMessages`、`deleteConversation`、`renameConversation`、`updateSystemPrompt`、`fetchLlmOptions`、`uploadAttachment`、`fetchAttachmentUrl`、`streamChat` / `streamRegenerate`（共用 `consumeSse()`）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
@@ -394,7 +394,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `components/admin/UserFormDialog.vue` | 小 | 新建用户：用户名 / 初始密码（可一键生成，`crypto.getRandomValues` + 去易混字符）/ 角色 / 状态；选项来自 `/options` 字典。 |
 | `components/admin/ResetPasswordDialog.vue` | 小 | 重置密码：生成随机 / 手输两种模式；生成模式下明文**只展示这一次**（readonly + 复制按钮 + 醒目提示），关掉就再也看不到。 |
 | `views/admin/AuditView.vue` | 小 | 操作记录页（`/admin/audit`，`meta.hidden` 不进导航条，从 UsersView 的「操作记录」链接进入）：时间 / 操作者 / 动作 / 目标 / 明细 + 分页。**只读且没有「清空记录」按钮**：能删的审计不叫审计。 |
-| `views/admin/UsersView.vue` | 中 | 用户管理页（`/admin/users`）：表格（行内改角色、启停、重置密码、强制下线、删除）+ 搜索/角色/状态筛选 + offset 分页；行内操作失败整页重拉，界面不和后端不一致地挂着。 |
+| `views/admin/UsersView.vue` | 中 | 用户管理页（`/admin/users`）：表格（行内改角色、启停、重置密码、强制下线、删除）+ 搜索/角色/状态筛选 + offset 分页；行内操作失败整页重拉。**层级锁死**：`canManage=false` 或自己的行，角色下拉换成纯文本标签、所有操作按钮 `disabled` + tooltip 说明原因（「不能修改自己的角色与信息」/「只能管理层级低于自己的用户」），不做「看起来能点、点了才 400」。 |
 | `components/UserMenu.vue` | 小 | 顶栏头像下拉：用户管理（仅 admin）/ 系统提示词 / 修改密码 / 退出登录。点外部或 Esc 关闭。**顶栏只留一个头像按钮**：四个文字按钮并排会把顶栏变成工具条 |
 
 ### 4.2 ChatView.vue 的状态与行为
@@ -578,7 +578,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `id` | `bigint` | PK, AUTO_INCREMENT | |
 | `username` | `varchar(50)` | NOT NULL, UNIQUE `uk_sys_user_username` | 业务上按「忽略首尾空格」后的值存取（`login()` 里 `.trim()`） |
 | `password` | `varchar(100)` | NOT NULL | BCrypt 哈希（固定 60 字符，留余量换算法）。**任何接口都不返回该字段** |
-| `role` | `int` | NOT NULL | `0`=普通用户，`1`=管理员。常量在 `auth/Roles.java` |
+| `role` | `int` | NOT NULL | `0`=普通用户，`1`=管理员，`2`=超级管理员，`3`=访客。常量与**层级**在 `auth/Roles.java`（`rank()`：超管 3 > 管理员 2 > 普通用户 1 > 访客 0）；管理操作只允许「上对下」 |
 | `status` | `int` | NOT NULL DEFAULT 0 | `0`=启用，`1`=禁用。常量在 `auth/UserStatus.java`。禁用后**登录 403、已登录的下一个请求 401**（AuthInterceptor 每请求回表）。**列带 DEFAULT 是刻意的**：给有数据的旧库加 NOT NULL 列时，没有 DEFAULT 在 MySQL 严格模式下直接失败；有 DEFAULT 则老行填 0=启用，不会把任何人锁在门外。2026-09-25 加入 |
 | `created_at` | `datetime(6)` | NOT NULL | `@PrePersist` 写入，`updatable=false` |
 | `password_changed_at` | `datetime(6)` | NULL | 从没改过密码为 NULL。签发时间（token `iat`）早于它的登录态一律作废 → **改密码会踢掉其他所有设备的会话**。**这列必须保持 `datetime(6)`**：后端按毫秒比较，精度掉到秒会让改密码那一秒签发的旧 token 躲过失效判断 |
@@ -721,13 +721,15 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 
 // AdminUserVO —— 管理表格的一行；没有 password，也没有 systemPrompt（「能列用户」不等于「能看别人的人设」）
 { "id": 2, "username": "alice", "role": 0, "roleLabel": "普通用户", "status": 1, "statusLabel": "禁用",
-  "lastLoginAt": "2026-09-25T11:39:44", "mustChangePassword": true, "createdAt": "..." }
+  "lastLoginAt": "2026-09-25T11:39:44", "mustChangePassword": true, "createdAt": "...", "canManage": true }
+// canManage = 目标层级严格低于当前操作者（Roles.rank 比较）；false 时前端把这一行的控件全部锁死
 
 // PageVO<AdminUserVO> —— GET /api/admin/users。offset 分页（page 从 0 起），和消息的游标分页刻意不是一套
 { "items": [ ... ], "page": 0, "size": 20, "total": 2, "totalPages": 1 }
 
-// UserAdminOptionsVO —— GET /api/admin/users/options。下拉选项用它生成，前端不写死 0/1
-{ "roles": [ { "code": 0, "label": "普通用户" }, { "code": 1, "label": "管理员" } ],
+// UserAdminOptionsVO —— GET /api/admin/users/options。下拉选项用它生成，前端不写死 code
+// roles 只返回**层级低于当前操作者**的角色（超级管理员看到 3 个，管理员看到 2 个，下拉里根本没有的选项比「选了才说不行」干净）
+{ "roles": [ { "code": 1, "label": "管理员" }, { "code": 0, "label": "普通用户" }, { "code": 3, "label": "访客" } ],
   "statuses": [ { "code": 0, "label": "启用" }, { "code": 1, "label": "禁用" } ] }
 
 // CreateUserRequest / UpdateRoleRequest / UpdateStatusRequest（role、status 可省略 = 默认 0）
@@ -979,9 +981,10 @@ send():
 
 | 操作 | 挡住的 case |
 |---|---|
-| 改状态 / 重置密码 / 强制下线 / 删除 | 目标 id == 当前用户（`CurrentUser` 形参注入，id 只来自 token） |
-| 改角色（把自己从管理员降下去） | 同上 |
-| 降级 / 禁用 / 删除 | 目标是「最后一个**启用的**管理员」（`countByRoleAndStatus(ADMIN, ENABLED) <= 1`；已禁用的管理员本来就进不来，不占名额） |
+| 任何写操作 | 目标 id == 当前用户（`CurrentUser` 形参注入，id 只来自 token）。改角色另有专门文案「不能修改自己的角色」；**界面上自己的角色控件是锁死的**（select 换成纯文本、按钮 disabled），后端这道 400 是防绕过界面直调 |
+| 任何写操作 | 目标层级 **≥** 操作者层级（`Roles.rank` 比较）：管理员因此碰不到管理员 / 超级管理员，超级管理员碰不到超级管理员（含自己）。文案：「只能管理层级低于自己的用户：对方是「xxx」」 |
+| 建号 / 改角色 | 新角色层级 ≥ 操作者层级：不能造一个和自己平级或更高的账号（所以超级管理员也建不出第二个超级管理员） |
+| 降级 / 禁用 / 删除 | 目标是「最后一个**启用的**管理者」：两层闸，① 启用的管理员+超级管理员合计 ≤1 → 400「系统至少需要保留一个启用的管理员」；② 目标是最后一个启用的**超级管理员** → 400「…超级管理员」。已禁用的管理者本来就进不来，不占名额 |
 
 **删号级联**（单事务，顺序不能换——三个外键都是 RESTRICT，先删父行撞 errno 1451）：
 `attachment.deleteByOwnerId` → `message.deleteByOwnerId` → `conversation.deleteByOwnerId` → `userRepository.delete`。
@@ -1016,10 +1019,11 @@ send():
 
 16. **CORS 白名单来自配置**：`cors.allowed-origins` 默认只有 Vite 的 5173，对外部署用 `CORS_ALLOWED_ORIGINS` 覆盖；留空启动失败而不是退化成 `*`。非白名单源的跨域请求拿 403 且不带 `Access-Control-Allow-Origin` 头，同源请求和服务器间调用（不带 Origin 头）不受影响。
 17. **人设隐私**：`system_prompt` 只在用户自己的 `/me`、登录响应和改人设响应里出现；管理员视角的 `AdminUserVO` 连这个字段都没有——「能列用户」不等于「能看别人的设置」。改人设**不换发 token**（与改密码刻意不同）：它不是安全事件，不该踢掉自己的其他设备。 |
-19. **管理端自我保护**：不能对自己改状态 / 降角色 / 重置密码 / 强制下线 / 删除，也不能动掉「最后一个启用的管理员」，一律 400。其中「最后一个管理员」那道闸在现有自我保护下其实不可达（actor 与 target 都是启用管理员时 count 必然 ≥2），**留着是防御纵深**：将来加批量接口或调整自我保护规则时它才会上场，别当死代码删。
+19. **管理端自我保护 = 层级模型**：`Roles.rank()` 超级管理员 3 > 管理员 2 > 普通用户 1 > 访客 0，所有写操作要求「目标层级严格低于操作者」，另加「不能对自己下手」「不能指派不低于自己的角色」「最后一个启用的管理者 / 超级管理员动不得」三道闸，一律 400 中文文案。**自己的角色在界面上是锁死的**（控件 disabled + 纯文本标签），不是「看起来能点、点了才报错」。层级与 code 解耦：code 是落库值（0/1 有历史含义不能改），rank 才是权限顺序。
 20. **随机密码只回显一次**：`ResetPasswordResult.generatedPassword` 只在那一次响应里出现，后端不留明文（库里只有 BCrypt 哈希）；前端弹窗关掉就再也看不到，界面上明确写「只显示这一次」。
 21. **删号不做软删除是刻意的**：`owner_id` 是 NOT NULL + RESTRICT，软删除就得给所有会话找一个「已注销」替身账号，反而造出一个谁都能看见的幽灵用户。「谁动过这个账号」的留痕由 `admin_audit_log` 承担（见 8.6），不靠留着登录行。
 22. **审计与业务同事务、且只记成功**：`AdminAuditService.record()` 必须在调用方自己的 `@Transactional` 里调——操作回滚则审计一起回滚，否则会出现「操作失败了却有一条留痕」的假记录，比没有审计更误导。审计表不建外键、应用层不开删除入口（repository 里没有 update/delete 方法），清历史只能走运维 SQL。
+23. **种子账号必须是超级管理员**：层级规则下管理员管不到管理员，若种子只是管理员，系统将永远无法创建 / 提升出超级管理员（没人有指派权限）。`AdminUserInitializer` 与 `init.sql` 的种子都是 role=2；**老库升级必须手工执行** `init.sql`「已有库升级：角色层级」段里那条 UPDATE 把初始账号提为超管，否则管理端最高只有管理员、建不出管理员。
 18. **禁用立刻生效，且不留枚举口子**：AuthInterceptor 每请求回表，所以禁用后目标账号的**下一个请求**就 401，不用等 token 自然过期；登录接口对禁用账号返回 403，但**放在密码校验之后**——顺序反了的话，「这个用户名存在但被禁用了」就成了一个可枚举的信息。已知限制：正在跑的 SSE 不会被打断（拦截器只在请求开始时执行）。 |
 ---
 18. **附件字节走鉴权接口而不是公开 URL**：`GET /api/attachments/{id}` 默认要登录（不在 `PUBLIC_PATHS`），归属校验与会话同一口径（404）；前端 fetch 成 blob 再转 objectURL。**刻意不做 `?token=` 兜底**（长期凭证进 URL / 日志 / 浏览器历史），也不把 base64 塞进消息 JSON（响应体膨胀几十倍）。出网 `Content-Type` 只能取白名单 5 种图片 MIME + `nosniff`，改名上传的 HTML 不会被当页面执行；**白名单刻意不含 SVG**（能带脚本）。
@@ -1158,6 +1162,7 @@ npm run preview      # 本地预览 dist/
 32. **掉登录态回登录页只有 App.vue 的 `watch(isAuthenticated)` 一个口子**：别在组件里各自写 `router.replace('/login')`，否则 401、退出登录、token 被别的标签页清掉这三条路径会各走各的逻辑。
 34. **管理台分页是 offset（`PageVO`），消息历史是游标（`MessagePageVO`），两套别混**：管理台要总数和「第几页」，聊天只要「还能不能往前翻」；给消息列表加 total 等于在 LONGTEXT 大表上多跑一次 count(*)。
 35. **LIKE 关键字必须转义 `% _ \`**（`UserSpecifications.escapeLike`）：否则搜「100%」变成前缀匹配、搜「_」命中所有人；用户输入不该被当 SQL 通配符。`toLowerCase` 用 `Locale.ROOT`，跟着系统区域走会在土耳其语环境搜不出结果。
+38. **`sys_user.role` 的 code 与层级（rank）是两回事，别拿 code 比大小**：code 里 `GUEST=3` 比 `ADMIN=1` 大，但层级最低；所有「谁能管谁」的判断必须走 `Roles.rank()`。前端同理：不要写 `role > 1` 这类判断。
 37. **审计的 `action` 是字符串不是 ENUM，别「顺手」改成 enum**：加审计动作应该是零迁移的（往 `AuditAction` 加常量即可）；改成 ENUM 每加一个动作都要手工 ALTER 列。`AuditAction.label()` 对不认识的动作名**原样返回**，是因为回滚过版本后表里可能出现新代码不认识的老动作，界面不该因此整页崩。
 36. **重置密码的 `generatedPassword` 不要存进任何前端状态**：它只在响应里出现一次；弹窗展示后随组件卸载丢弃。存 localStorage 等于把明文密码写盘。
 33. **本机 `mvnw` 默认跑在 JDK 1.8 上**（`JAVA_HOME` 指向 `C:\Program Files\Java\jdk-1.8`）：record、`instanceof` 模式匹配全不认识，报一堆「需要 class, interface, enum」，看起来像代码写错了其实是工具链。编译 / 启动本项目前必须 `JAVA_HOME` 指到 26（IntelliJ 装在 `~/.jdks/openjdk-26.0.2.1`），IDE 里跑不受影响是因为 IDE 用自己下载的 JDK。
@@ -1209,5 +1214,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-25（第十八次） | **用户管理页面（/admin/users）**：第一个和聊天平级的功能模块。`views/admin/UsersView.vue`（表格 + 行内改角色/启停 + 搜索筛选 + offset 分页）、`components/admin/{UserFormDialog,ResetPasswordDialog}.vue`、`components/common/ConfirmDialog.vue`（删号要求输入用户名）、`api/userAdmin.ts`、`types.ts` 管理端类型、`routes.ts` 注册（懒加载、独立分包）；`AppShell` 挂关不掉的强制改密框（`ChangePasswordDialog` 加 `force`），`ModuleNav` 底部加账号按钮 + 退出登录（管理页没有聊天顶栏的头像菜单）。浏览器实测：建号/禁用/重置/删号全链路、普通用户送 /403 且导航只剩聊天、强制改密框自动弹出并可完成 |
 | 2026-09-25（第十九次） | **用户管理入口从弹窗改为平级模块跳转**：`UserMenu` 的「用户管理」`router.push('/admin/users')`；删除 `UserListDialog.vue` 与 `api.ts` 的 `listUsers`（留着就是「两个地方都能看用户列表」的重复入口）。ChatView 只动 5 行 |
 | 2026-09-25（第二十次） | **操作审计日志**。新表 `admin_audit_log`（actor/target 存 id+名字快照、不建外键；action 存字符串不用 ENUM）+ `entity/AuditAction` + `AdminAuditLogRepository`（只读不改）+ `AdminAuditService`（record 与业务同事务 / page）+ `AdminAuditController`（`GET /api/admin/audit`，23 号接口）+ `AdminAuditLogVO`；`AdminUserService` 六个写操作各记一行（`create` 补 `CurrentUser` 形参）。前端 `views/admin/AuditView.vue`（`/admin/audit`，hidden 路由，UsersView 头部「操作记录」链接进入，只读无清空按钮）+ `api/userAdmin.ts` 的 `listAdminAudit`。临时库实测：六个动作各留一行、失败操作（400）不留痕、删号后靠 target_name 认人、非管理员 403。6.1 加表结构、7.1 加 23 号、8.6 加审计段、九 加 22 条、13.1 第 7 条改写、13.2 加 37 条 |
+| 2026-09-25（第二十一次） | **角色层级模型**：新增 `SUPER_ADMIN=2`（超级管理员）与 `GUEST=3`（访客：应用内权限同普通用户、层级最低，作「降权但不禁用」的承接位）；`Roles.rank()` 表达层级，管理端所有写操作要求「目标层级严格低于操作者」，建号/改角色要求「新角色层级严格低于操作者」，自己的角色界面锁死 + 后端 400 双保险；「最后一个启用的管理者 / 超级管理员」两道闸。种子账号（`AdminUserInitializer` 与 `init.sql`）改为超级管理员，`init.sql` 附老库升级 UPDATE。`AdminUserVO` 加 `canManage`、`/options` 的 roles 按操作者层级过滤，前端锁死行把 select 换成纯文本标签。临时库实测：超管/管理员/访客三种视角的 canManage 与控件锁死状态、越级操作 400 文案、指派平级角色 400、访客 403。6.1 / 7.2 / 8.6 / 九 / 13.2 同步 |
 *最后更新：2026-09-25*
 
