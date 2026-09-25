@@ -2,6 +2,7 @@ import { markRaw } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 import AppShell from '@/layouts/AppShell.vue'
 import IconChat from '@/components/icons/IconChat.vue'
+import IconUsers from '@/components/icons/IconUsers.vue'
 import LoginView from '@/views/LoginView.vue'
 import ChatView from '@/views/ChatView.vue'
 import ForbiddenView from '@/views/ForbiddenView.vue'
@@ -57,6 +58,13 @@ export const routes: RouteRecordRaw[] = [
         name: 'chat',
         component: ChatView,
         meta: { moduleId: 'chat', title: '聊天', icon: markRaw(IconChat), order: 10 },
+      },
+      {
+        // 第一个和聊天平级的功能模块。懒加载：普通用户不下载管理台代码。
+        path: 'admin/users',
+        name: 'admin-users',
+        component: () => import('@/views/admin/UsersView.vue'),
+        meta: { moduleId: 'admin-users', title: '用户管理', icon: markRaw(IconUsers), order: 90, requiresAdmin: true },
       },
       {
         path: FORBIDDEN_PATH.slice(1),

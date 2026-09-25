@@ -3,6 +3,12 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { changePassword } from '@/api'
 import type { LoginResult } from '@/types'
 
+/**
+ * force=true = 管理员重置过密码、本人还没改：弹窗关不掉（没有取消按钮，Esc / 点遮罩都无效），
+ * 改完才能继续用任何模块。普通入口（头像菜单「修改密码」）不传，行为与原来完全一致。
+ */
+const props = withDefaults(defineProps<{ force?: boolean }>(), { force: false })
+
 const emit = defineEmits<{
   close: []
   /**
@@ -22,6 +28,10 @@ const ok = ref('')
 let closeTimer: ReturnType<typeof setTimeout> | null = null
 
 function close(): void {
+  // force 模式下「关掉」等于绕过强制改密，直接吞掉
+  if (props.force) {
+    return
+  }
   if (closeTimer) {
     clearTimeout(closeTimer)
     closeTimer = null
@@ -76,7 +86,9 @@ async function submit(): Promise<void> {
 <template>
   <div class="modal-mask" @click.self="close">
     <form class="modal-card" @submit.prevent="submit">
-      <h2 class="modal-title">修改密码</h2>
+      <h2 class="modal-title">
+        修改密码<span v-if="force" class="modal-title-note">管理员已重置你的密码，设置新密码后才能继续</span>
+      </h2>
 
       <div v-if="error" class="alert-error">{{ error }}</div>
       <div v-if="ok" class="alert-ok">{{ ok }}</div>
@@ -121,7 +133,7 @@ async function submit(): Promise<void> {
       <p class="modal-tip">改完密码后当前设备会自动续期，其他设备上的登录态会立即失效，需要重新登录。</p>
 
       <div class="modal-actions">
-        <button class="btn-ghost" type="button" :disabled="submitting" @click="close">取消</button>
+        <button v-if="!force" class="btn-ghost" type="button" :disabled="submitting" @click="close">取消</button>
         <button
           class="btn-primary"
           type="submit"
@@ -135,6 +147,13 @@ async function submit(): Promise<void> {
 </template>
 
 <style scoped>
+.modal-title-note {
+  margin-left: 8px;
+  font-size: 12px;
+  font-weight: normal;
+  color: var(--text-muted);
+}
+
 .modal-tip {
   margin: 0;
   font-size: 12px;

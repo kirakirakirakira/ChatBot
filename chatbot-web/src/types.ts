@@ -132,3 +132,46 @@ export interface LoginResult {
   expiresIn: number
   user: CurrentUser
 }
+
+/** ---------- 用户管理（管理员视角，对应后端 /api/admin/users） ---------- */
+
+/** 后端 AdminUserVO：管理表格里的一行。刻意不含 password / systemPrompt。 */
+export interface AdminUser {
+  id: number
+  username: string
+  role: number
+  roleLabel: string
+  /** 0=启用，1=禁用，见后端 auth/UserStatus。 */
+  status: number
+  statusLabel: string
+  /** 最近登录时间；从没登录过为 null。 */
+  lastLoginAt: string | null
+  /** 管理员重置过密码、本人还没改。 */
+  mustChangePassword: boolean
+  createdAt: string
+}
+
+/**
+ * 后端 PageVO<T>：offset 分页壳（page 从 0 起）。
+ * 和消息的游标分页刻意不是一套：管理台需要总数和「第几页」，聊天只需要「还能不能往前翻」。
+ */
+export interface Page<T> {
+  items: T[]
+  page: number
+  size: number
+  total: number
+  totalPages: number
+}
+
+/** GET /api/admin/users/options：角色 / 状态字典。下拉选项用它生成，前端不写死 0/1。 */
+export interface UserAdminOptions {
+  roles: { code: number; label: string }[]
+  statuses: { code: number; label: string }[]
+}
+
+/** 重置密码的响应。generatedPassword 只在「生成随机密码」时回显一次，后端不留明文。 */
+export interface ResetPasswordResult {
+  generatedPassword: string | null
+  mustChangePassword: boolean
+}
+
