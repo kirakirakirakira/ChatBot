@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { login } from '@/api'
 import { setSession } from '@/auth'
+import { safeNextPath } from '@/router/guards'
+import { HOME_PATH } from '@/router/paths'
+
+const route = useRoute()
+const router = useRouter()
 
 const username = ref('')
 const password = ref('')
@@ -9,9 +15,10 @@ const submitting = ref(false)
 const error = ref('')
 
 /**
- * 提交登录。成功后只做一件事：setSession()。
- * App.vue 依赖 isAuthenticated（computed），登录态一变就自动把 LoginView 换成主界面，
- * 这里不需要做任何路由跳转 —— 项目没有 vue-router，「页面切换」就是根组件换人。
+ * 提交登录。成功后 setSession() 写登录态，再跳回「被守卫拦下来之前想去的那个模块」。
+ * next 是 URL 上的外部可控参数，**必须过 safeNextPath()**：不校验就是一个开放重定向。
+ * 用 replace 而不是 push：登录页不该留在历史记录里，否则登录后按后退又回到登录页
+ * （守卫会再把你弹回首页，表现为「后退按不动」）。
  */
 async function submit(): Promise<void> {
   if (submitting.value) {
@@ -27,6 +34,7 @@ async function submit(): Promise<void> {
   try {
     const result = await login(name, password.value)
     setSession(result.token, result.user)
+    void router.replace(safeNextPath(route.query.next) ?? HOME_PATH)
   } catch (e) {
     // 后端统一返回「用户名或密码错误」，不区分是账号不存在还是密码错（防用户名枚举）
     error.value = e instanceof Error ? e.message : String(e)

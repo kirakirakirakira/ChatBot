@@ -17,7 +17,7 @@ DashScope or any other OpenAI-compatible model.
 | Layer | Tech |
 | ----- | ---- |
 | Backend | Java 26, Spring Boot 4.1.1, Spring Data JPA, MySQL 8 |
-| Frontend | Vue 3.5, TypeScript 6, Vite 8, markdown-it + highlight.js + DOMPurify (assistant-message rendering) |
+| Frontend | Vue 3.5, TypeScript 6, Vite 8, **vue-router 4** (URL-per-module routing; route guards are the auth gate), markdown-it + highlight.js + DOMPurify (assistant-message rendering) |
 | LLM | Bailian DashScope (OpenAI-compatible), streaming, per-request model selection (`llm.available-models`), thinking budget, opt-in web search (`enable_search`), and image input (`llm.vision-models` whitelist, attachments stored in MySQL). No API key configured -> local mock LLM |
 
 ## Project Structure
@@ -59,6 +59,10 @@ cd chatbot-web
 npm install
 npm run dev                     # http://localhost:5173, Vite proxies /api to :8089
 ```
+
+The frontend uses history-mode routing (`/chat`, `/admin/users`, …). The Vite dev server falls
+back to `index.html` for you; **for production, configure your static server the same way**
+(e.g. nginx `try_files $uri /index.html`), or refreshing a deep URL will 404 at the server.
 
 ### Default admin
 

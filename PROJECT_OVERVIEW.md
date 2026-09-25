@@ -38,7 +38,6 @@
 
 **本项目刻意没有的东西**（找不到不是你没找到，是真的没有）：
 
-- 没有 `vue-router`：页面切换 = `App.vue` 换根组件（`LoginView` ↔ `ChatView`）。
 - 没有状态管理库（Pinia/Vuex）：登录态是 `src/auth.ts` 里的模块级 `ref`。
 - 没有 `axios`：全部用原生 `fetch`。
 - 没有 `spring-boot-starter-security`：只引了 `spring-security-crypto` 拿 BCrypt。
@@ -80,7 +79,7 @@
 | HTTP 客户端 | JDK 原生 `java.net.http.HttpClient`（**没有** RestTemplate/WebClient/OkHttp） | `llm/OpenAiCompatibleLlmClient.java` |
 | 数据库 | MySQL 8.0，`utf8mb4` / `utf8mb4_unicode_ci` | `chatbot/sql/init.sql` |
 | ORM | Spring Data JPA + Hibernate，`ddl-auto=update`，`open-in-view=false` | `application.properties` |
-| 前端 | Vue **3.5.40**、markdown-it **^15**（渲染）、highlight.js **^11**（只注册 common 语言子集）、dompurify **^3**（渲染结果消毒） | `chatbot-web/package.json` |
+| 前端 | Vue **3.5.40**、**vue-router ^4**（URL 即模块；权限闸门在路由守卫里）、markdown-it **^15**（渲染）、highlight.js **^11**（只注册 common 语言子集）、dompurify **^3**（渲染结果消毒） | `chatbot-web/package.json` |
 | 前端工具链 | `@vitejs/plugin-vue` ^6.0.8、`vite-plugin-vue-devtools` ^8.1.5、`vue-tsc` ^3.3.7、`npm-run-all2` ^9.0.2、`@vue/tsconfig` ^0.9.1、`@tsconfig/node24`、`@types/node` ^24.13.3、`@types/markdown-it` ^14 | `chatbot-web/package.json` |
 | Node 要求 | `^22.18.0 \|\| >=24.12.0`（低版本直接 EBADENGINE） | `chatbot-web/package.json` 的 `engines` |
 | Maven Wrapper | 3.3.4（`only-script`，Apache Maven 3.9.16） | `chatbot/.mvn/wrapper/maven-wrapper.properties` |
@@ -128,16 +127,19 @@ chatbot/                        # 仓库根（git 仓库在这一层）
     ├── env.d.ts / index.html / README.md
     ├── public/favicon.ico
     └── src/
-        ├── main.ts             # createApp(App).mount('#app')
-        ├── App.vue             # 根组件 = 权限闸门
+        ├── main.ts             # createApp(App).use(router).mount('#app')
+        ├── App.vue             # RouterView + 掉登录态回登录页的全局 watch
+        ├── session.ts          # ensureSession()：本地 token 的一次性有效性确认
+        ├── router/             # index / routes（模块注册表）/ guards（登录与角色闸门）/ paths
+        ├── layouts/            # AppShell.vue：模块导航 + 内容区外壳
         ├── api.ts              # 聊天与登录的接口清单（传输层已抽到 api/client.ts）
         ├── api/                # client.ts：fetch 封装 + Authorization 头 + 401 兜底，全站唯一一份
         ├── auth.ts             # 登录态（模块级 ref + localStorage）
         ├── types.ts            # 与后端 DTO/VO 一一对应的类型
         ├── assets/main.css     # 全局 CSS 变量 + 登录/弹窗共用件
         ├── lib/                # markdown.ts：markdown-it + highlight.js + DOMPurify
-        ├── views/              # LoginView.vue、ChatView.vue
-        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、AttachmentThumb、ChangePasswordDialog、SystemPromptDialog、UserListDialog、UserMenu
+        ├── views/              # LoginView、ChatView、ForbiddenView、NotFoundView
+        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、AttachmentThumb、ChangePasswordDialog、SystemPromptDialog、UserListDialog、UserMenu、ModuleNav、icons/
 ```
 
 ### 2.2 后端逐文件清单
@@ -351,15 +353,25 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 
 | 文件 | 行数级别 | 职责 |
 |---|---|---|
-| `main.ts` | 5 | `import './assets/main.css'` + `createApp(App).mount('#app')`。没有注册任何插件。 |
-| `App.vue` | 小 | **根组件 = 权限闸门**。`restoring` ref 初值 = 「本地是否有 token」；`onMounted` 里若有 token 就调 `fetchMe()` 验证并 `setSession()` 刷新用户信息（角色可能变了），失败则 `clearSession()`。模板三分支：`restoring` → 「正在恢复登录状态…」；`isAuthenticated` → `<ChatView/>`；否则 → `<LoginView/>`。**没有 router，页面切换就是这里换组件。** |
+| `main.ts` | 5 | `import './assets/main.css'` + `createApp(App).use(router).mount('#app')`。插件只有 vue-router。 |
+| `App.vue` | 小 | 根组件只剩两件事：① `router.isReady()` 之前显示「正在恢复登录状态…」；② **对 `isAuthenticated` 的全局 watch**——登录态一旦消失（接口 401、ChatView 的退出登录、账号被禁用）就把界面送回 `/login?next=<当前路径>`。掉登录态的入口不止 401 一条，所以兜底放在这里而不是传输层；也因此 ChatView 不用为路由改任何一行。原来的「三分支权限闸门」已搬进 `router/guards.ts`。 |
+| `session.ts` | 小 | `ensureSession()`：本地有 token 时向 `GET /api/auth/me` 做**一次性**有效性确认并缓存 promise（每次导航都进守卫，不能一次导航打一次接口）；成功顺带刷新 localStorage 里的用户信息（角色可能变了）。原来是 `App.vue` 的 onMounted 逻辑，搬进守卫是因为守卫若直接读 localStorage 里的旧角色，「管理员被降级后刷新页面」那一下 `requiresAdmin` 会误判通过。独立成文件是因为 `auth.ts` 不能 import `api.ts`（会与 `api.ts → auth.ts` 成环）。 |
+| `router/index.ts` | 小 | `createRouter(createWebHistory())` + 挂守卫 + `scrollBehavior` 归零。**history 模式**：URL 干净，但生产部署必须让静态服务器把未命中路径回退到 `index.html`（nginx `try_files $uri /index.html`），否则直接访问或刷新 `/admin/users` 会拿到服务器 404；开发期 Vite 自带回退，本地永远发现不了这个问题。 |
+| `router/routes.ts` | 小 | **模块注册表**，也是「怎么加一个平级功能模块」的答案：`RouteMeta` 类型增强（`moduleId` / `title` / `icon` / `order` / `requiresAdmin` / `hidden` / `public`）+ 全部路由记录。带 `moduleId` 的记录会自动出现在导航条上，带 `requiresAdmin` 的会被守卫自动拦成 `/403`。聊天用静态 import（落地页不能闪空白），管理台用 `() => import()`（普通用户不下载管理台代码）。 |
+| `router/guards.ts` | 小 | 登录闸门 + 角色闸门：`beforeEach` 先 `await ensureSession()`，再按 `meta.public` / `isAuthenticated` / `meta.requiresAdmin` 决定放行、跳 `/login?next=` 还是 `/403`；`afterEach` 维护 `document.title`。另导出 `safeNextPath()`：`?next=` 只接受站内绝对路径，挡掉 `//evil.com` 这类协议相对 URL 的开放重定向。 |
+| `router/paths.ts` | 小 | `LOGIN_PATH` / `HOME_PATH` / `FORBIDDEN_PATH` 常量。单独一个文件而不是塞进 `routes.ts`：`routes.ts` 要 import 各视图，视图又要这些常量做「回到聊天」链接，放一起就是循环依赖。 |
+| `layouts/AppShell.vue` | 小 | 应用外壳：左侧 `ModuleNav` + 内容区 `<RouterView/>`。所有平级模块都作为它的子路由挂在下面，天生共享导航与登录闸门；登录页刻意不在里面（未登录的人不该看到任何模块导航）。`.app-main` 的 `min-width: 0` 不能省：flex 子项默认 `min-width:auto`，聊天区里的长代码块会把导航条挤出视口。 |
+| `components/ModuleNav.vue` | 小 | 56px 模块导航条。条目**从路由表派生**（`meta.moduleId` 过滤 + `order` 排序），不在组件里写死，所以加模块不用改它；`requiresAdmin` 的模块对普通用户直接不渲染（真正的拦截在后端 `@RequireAdmin` 和守卫，这里只是不给人看一个必然 403 的按钮）。激活态用 vue-router 自带的 `router-link-active`（含子路由匹配），不用自己算。 |
+| `components/icons/IconChat.vue` | 小 | 模块导航图标：24×24 描边、`stroke=currentColor`，颜色由导航条 CSS 决定。新模块照这个规格加一个 SFC，经 `markRaw()` 放进路由 meta（不 markRaw 会被 reactive 代理，白白增加开销）。 |
+| `views/ForbiddenView.vue` | 小 | `/403`：已登录但权限不够。显示当前角色 + 「回到聊天」。挂在外壳里，所以还能用导航条去别的模块，不至于困在死页上。 |
+| `views/NotFoundView.vue` | 小 | `/:pathMatch(.*)*` 兜底，同样挂在外壳里：登录状态下打错地址还能点导航回去，不用手改 URL。 |
 | `auth.ts` | 小 | 登录态。导出 `ROLE_USER=0`/`ROLE_ADMIN=1`（与后端 `Roles` 对齐）、`token`/`currentUser`（模块级 `ref`，初值读 `localStorage` 的 `chatbot.token`/`chatbot.user`）、`isAuthenticated`/`isAdmin`（`computed`）、`setSession(token,user)`、`clearSession()`。`readStoredUser()` 对 JSON 解析失败返回 null（存坏了就当没登录）。**本文件不要 import api.ts**，否则和 `api.ts → auth.ts` 形成循环依赖。 |
 | `api/client.ts` | 小 | **全站唯一的 HTTP 传输层**（2026-09-25 从 `api.ts` 抽出）。导出 `API_BASE='/api'`、`request<T>(path, init)`、`withAuth(headers?)`、`extractErrorMessage(response)`。`request()` 的口径：挂 `Authorization: Bearer`、非 2xx 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（界面随即弹回登录页）、204 返回 `undefined`。抽出来的理由：项目要长出一批和聊天**平级的功能模块**，每个模块一个 api 文件互不干扰，但「挂鉴权头 + 401 清登录态」只能有一份实现，否则某个模块自己写 fetch 忘了处理 401，界面就会停在一张点什么都 401 的死页面上。**依赖方向刻意单向 `client.ts → auth.ts`**：本文件不 import router——反向 import 会形成 `router → guards → api → client → router` 的环，ESM 下表现为某个绑定初始化时还是 `undefined`，很难查。「掉登录态就回登录页」的兜底放在 `App.vue`，因为那条路径不止 401 一个入口（还有主动退出登录），兜底要兜在一个口子上。 |
 | `api.ts` | 中 | **聊天与登录的接口清单**：只描述「有哪些接口、请求体和响应长什么样」，传输层（fetch 封装 / 鉴权头 / 401 兜底）在 `api/client.ts`。新增别的平级模块请另开 `src/api/<模块>.ts`，不要往这里堆。导出：`login`、`fetchMe`、`changePassword`、`listUsers`、`createConversation`、`listConversations`、`getMessages`（带 `{before, limit}` 分页参数，返回 `MessagePage`）、`deleteConversation`、`renameConversation`、`updateSystemPrompt`、`fetchLlmOptions`、`uploadAttachment(conversationId, file)`（FormData，**不手动设 Content-Type**）、`fetchAttachmentUrl(id)`（**fetch 成 blob 再转 objectURL**：img 标签带不了 Authorization 头）、`streamChat` / `streamRegenerate`（**共用 `consumeSse()` 解析 SSE、`pickStreamOptions()` 拼请求体**，不存在第二份 SSE 契约）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
 | `types.ts` | 小 | 与后端一一对应：`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`（含 `model` / 三个 token 计数）、`CurrentUser`↔`UserVO`、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`（`done` 事件带用量）、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`（含 `visionModels`）、`Attachment`↔`AttachmentVO`；另有**纯前端**的 `AttachmentRef`（比 `Attachment` 多 `id: number|null` 与本地 `url?`）和 `UiMessage`（比 `Message` 多 `id: number\|null`、`reasoning?`、`error?`、`streaming?`、`model?`、用量三字段） |
 | `assets/main.css` | 中 | 全局设计变量（暖中性纸感浅色 / 深墨暗色，跟随系统 `prefers-color-scheme`）+ 半径 / 阴影 / 细滚动条 / 选区 / 焦点环 + **登录与四个弹窗共用的基础件**（`.field*` / `.btn-*` / `.alert-*` / `.modal-*`，放全局是因为长得一样、只写一份） |
 | `lib/markdown.ts` | 小 | markdown-it 实例 + 自定义 fence 渲染器（代码块包 `.code-block`、加语言标签和复制按钮）+ `renderMarkdown()`（渲染后过 DOMPurify）。**安全两道锁**：`html:false` 转义输入里的原始 HTML，DOMPurify 再兜一道；`breaks:true` 让单换行也换行。高亮只注册 highlight.js common 子集，认不出的语言原样输出不报错 |
-| `views/LoginView.vue` | 中 | 登录表单：两团淡品牌色光晕背景 + 居中卡片（圆角 20、入场动画）。`submit()` 成功后**只做 `setSession()`**，不做任何跳转（App.vue 的 computed 自动换根组件）。失败展示后端文案并清空密码框 |
+| `views/LoginView.vue` | 中 | 登录表单：两团淡品牌色光晕背景 + 居中卡片（圆角 20、入场动画）。成功后 `setSession()` + `router.replace(safeNextPath(next) ?? HOME_PATH)`——用 replace 而不是 push：登录页不该留在历史记录里，否则登录后按后退又回到登录页。失败展示后端文案并清空密码框。 |
 | `views/ChatView.vue` | **大（前端最大文件）** | 聊天主界面：隐形顶栏（会话标题 + `UserMenu` 头像菜单）、居中限宽 760px 的消息列、空状态问候语 + 开场建议 chips、胶囊合成输入框（自动长高、圆形发送/停止、**待发送图片缩略图条 + 粘贴/拖拽传图**）。详见 4.2 |
 | `components/ConversationSidebar.vue` | 中 | 纯展示组件。props `conversations`/`activeId`/`canCreate`；emits `select(id)`/`create()`/`remove(id)`/`rename(id, title)`。品牌标 + 虚线「新建对话」；列表项 hover 才浮出重命名/删除图标（盖住时间戳，一行宽度有限）；双击标题或点铅笔行内改名 |
 | `components/MessageBubble.vue` | 小 | 单条消息。**助手消息带头像、不套气泡**（长回答铺在背景上比塞进盒子里好读）；用户消息是浅色圆角 pill。图片缩略图排在文字之前（与发给模型的顺序一致）、思考折叠、Markdown 正文、用量行、hover 才显形的「重新生成」 |
@@ -431,14 +443,20 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 **组件树与数据流**
 
 ```
-App.vue  （权限闸门：restoring / isAuthenticated）
-├── LoginView.vue ──api.login()──→ auth.setSession() ──→ App.vue 自动换成 ChatView
-└── ChatView.vue
-    ├── ConversationSidebar.vue   props↓ conversations/activeId/canCreate   emits↑ select/create/remove
-    ├── MessageBubble.vue × N     props↓ message: UiMessage（无 emit，纯展示）
-    │       └── AttachmentThumb.vue × N   props↓ attachment: AttachmentRef（自己 fetch 字节、自己 revoke）
-    ├── ChangePasswordDialog.vue  emits↑ close / changed(LoginResult) → ChatView.setSession()
-    └── UserListDialog.vue        emits↑ close（数据自己拉 listUsers()）
+App.vue  （RouterView + 掉登录态回登录页的全局 watch）
+├── router/guards.ts   beforeEach：ensureSession() → public? / 未登录 → /login?next= / requiresAdmin → /403
+├── LoginView.vue      （顶层路由，不在外壳里）──api.login()──→ setSession() → router.replace(next)
+└── layouts/AppShell.vue
+    ├── ModuleNav.vue          条目从 routes.ts 的 meta.moduleId 派生
+    └── <RouterView/>
+        ├── ChatView.vue
+        │   ├── ConversationSidebar.vue   props↓ conversations/activeId/canCreate   emits↑ select/create/remove
+        │   ├── MessageBubble.vue × N     props↓ message: UiMessage（无 emit，纯展示）
+        │   │       └── AttachmentThumb.vue × N   props↓ attachment: AttachmentRef（自己 fetch 字节、自己 revoke）
+        │   ├── ChangePasswordDialog.vue  emits↑ close / changed(LoginResult) → ChatView.setSession()
+        │   └── UserListDialog.vue        emits↑ close（数据自己拉 listUsers()）
+        ├── ForbiddenView.vue  /403
+        └── NotFoundView.vue   其余一切路径
 ```
 
 ### 4.3 SSE 流式解析（`api.ts` 的 `streamChat`）
@@ -459,7 +477,7 @@ App.vue  （权限闸门：restoring / isAuthenticated）
 2. 路径一律用别名 `@/`（`vite.config.ts` 里 `@` → `./src`），不写相对路径爬楼。
 3. 显式返回类型（`: Promise<void>`、`: string`），`tsconfig.app.json` 开了 `noUncheckedIndexedAccess`，数组下标访问要处理 `undefined`（代码里的 `messages.value[...]!` 就是为此）。
 4. 注释用中文，重点写「为什么」，尤其是踩过的坑。
-5. 新增页面：在 `views/` 下加组件，在 `App.vue` 里按条件切换渲染（**没有 router**）。
+5. 新增页面 / 平级功能模块：在 `views/` 下加组件，在 `router/routes.ts` 里加一条路由记录；带 `meta.moduleId` 自动进导航条，带 `meta.requiresAdmin` 自动被守卫拦权限，**ModuleNav 与 guards 都不用改**。
 6. 新增后端调用：聊天 / 登录相关加在 `api.ts`，**别的平级功能模块另开 `src/api/<模块>.ts`**（模块内聚、互不干扰），类型加在 `types.ts`；两者都只能用 `api/client.ts` 的 `request()` / `withAuth()`，**不要在组件里直接写 fetch**，否则丢掉 401 兜底。
 7. 登录/弹窗类样式优先复用 `assets/main.css` 里的全局类，组件特有样式才写 `<style scoped>`。
 
@@ -840,17 +858,23 @@ PUT /api/users/me/password  {oldPassword, newPassword}
 ### 8.4 前端启动与权限闸门
 
 ```
-浏览器加载 → main.ts → App.vue
-  restoring = (localStorage 里有 token)
-  onMounted:
-    无 token → restoring = false → 渲染 LoginView
-    有 token → GET /api/auth/me
-                200 → setSession(token, me)（顺带刷新用户信息，角色可能变了）→ 渲染 ChatView
-                401 → api.ts 已 clearSession()，这里再兜一次 → 渲染 LoginView
+浏览器加载 → main.ts → app.use(router) → 首次导航进守卫
+  guards.beforeEach(to):
+    await ensureSession()          // 本地有 token 才发 GET /api/auth/me，且整个页面加载只发一次
+      200 → setSession(token, me)（顺带刷新用户信息，角色可能变了）
+      失败 → api/client.ts 已 clearSession()，这里再兜一次
+    to.meta.public 且已登录且是 /login → 重定向 /chat
+    未登录 → /login?next=<to.fullPath>
+    to.meta.requiresAdmin 且 !isAdmin → /403
+  App.vue：router.isReady() 之前显示「正在恢复登录状态…」，之后渲染 <RouterView/>
   ChatView.onMounted → loadConversations() → 有会话选第一个，没有就 newConversation()
 ```
 
-运行期任何接口返回 401 → `api.ts` 的 `clearSession()` → `isAuthenticated` 变 false → `App.vue` 自动弹回登录页。**因此不存在绕过登录能访问的页面，也不需要路由守卫。**
+运行期任何接口返回 401 → `api/client.ts` 的 `clearSession()` → `isAuthenticated` 变 false →
+**App.vue 里对 `isAuthenticated` 的全局 watch** 把界面送回 `/login?next=<当前路径>`。
+掉登录态的入口不止 401 一条（还有 ChatView 的「退出登录」直接调 `clearSession()`），
+所以兜底放在这个 watch 里而不是放在传输层：一个口子管所有路径，ChatView 也因此不用为路由改任何一行。
+「直接输 URL 绕过登录」则由守卫保证不存在——闸门从 App.vue 的条件渲染搬到了 `beforeEach` 里。
 
 ### 8.5 空会话回收
 
@@ -972,7 +996,7 @@ npm run preview      # 本地预览 dist/
 1. **换 LLM 服务商**：改 `llm.base-url` + `llm.model` + `llm.api-key` 即可，任何 OpenAI 兼容接口都能直连。服务商不认识 `enable_thinking` 时，把 `application.properties` 里那一行整行注释掉（`LlmProperties.enableThinking` 变 null → 请求体不下发该字段）。要支持非兼容协议，新写一个 `LlmClient` 实现并在 `LlmConfig` 里加分支。
 2. **新增角色 / 细粒度权限**：在 `Roles` 加常量，新增注解（如 `@RequireOperator`），在 `AuthInterceptor.requiresAdmin()` 旁边加对应判断。`sys_user.role` 是 int，**不用改列类型**。
 3. **新增接口**：`controller/` 下加方法即可，默认要登录；管理员接口加 `@RequireAdmin`。需要当前用户就在形参里声明 `CurrentUser`。
-4. **新增前端页面**：`views/` 下加组件，在 `App.vue` 里按条件切换渲染（没有 router；若页面数量增长到需要路由，引入 `vue-router` 时要把 `App.vue` 的权限闸门改成路由守卫）。
+4. **新增前端页面 / 平级功能模块**：`views/` 下加组件 + `router/routes.ts` 里加一条路由记录。带 `meta.moduleId` / `title` / `icon` / `order` 就会自动出现在左侧模块导航条上，带 `meta.requiresAdmin` 守卫就会自动拦成 `/403`——**ModuleNav 与 guards 都不用改**。管理台类视图用 `() => import()` 懒加载，聊天这类落地页保持静态 import。
 5. **`chatbot/README.md` 末尾的「后续待加」**：见该文件，已完成的条目会随变更删掉。
 6. **多模态往哪扩**：图片输入已通（`image_url` + base64）。下一步自然是把 `data` 换成对象存储 key（多实例部署的前提）、给孤儿附件加定时清理、或按 `usage` 回填做动态 token 预算（把图片 token 也算进去）。
 
@@ -1019,6 +1043,10 @@ npm run preview      # 本地预览 dist/
 26. **一个附件只能挂一条消息**：`linkToMessage` 的 UPDATE 带 `message_id IS NULL`，重复提交同一个 id 会 400「附件不可用」。副作用是「发送失败后重试」必须重新选图（旧附件已挂在失败那条用户消息上）；前端发送成功后会清空 `pending`，正常路径感知不到。
 27. **多模态校验的顺序是刻意的**：`chat()` 里「附件校验 → 模型白名单 → 落库」，保证非法请求不留半条消息；但「历史里有旧图 + 用户换了非视觉模型」只能在落库后查出来，此时 400 是**可接受的**（用户消息还在，换回视觉模型点重新生成即可）。反过来 `regenerate()` 必须先查再删，否则旧回答白删。
 28. **上传超限是 413 不是 400**：`MaxUploadSizeExceededException` 在 multipart 解析阶段抛出、到不了 controller，必须由 `GlobalExceptionHandler` 专门接住，否则用户只看到 500 + Spring 默认错误页。
+29. **history 模式生产部署必须配回退**：`createWebHistory()` 下直接访问 `/admin/users` 或在该页刷新，请求会真的打到静态服务器；不配 `try_files $uri /index.html`（nginx）就是服务器 404。开发期 Vite 自带回退，所以本地永远发现不了这个问题。
+30. **`ensureSession()` 的 promise 按页面加载缓存**：登录响应自带 user，登录后不需要重验；但同一次页面加载内后端改了角色，界面不会感知，要等下次刷新。想实时就得轮询 `/api/auth/me`，目前刻意不做。
+31. **`?next=` 必须过 `safeNextPath()`**：它是 URL 上的外部可控参数，`//evil.com` 这种协议相对 URL 不挡掉就是一个现成的开放重定向。
+32. **掉登录态回登录页只有 App.vue 的 `watch(isAuthenticated)` 一个口子**：别在组件里各自写 `router.replace('/login')`，否则 401、退出登录、token 被别的标签页清掉这三条路径会各走各的逻辑。
 24. **历史 token 预算是估算值**：没有分词器可用，按「中文 1 字 1 token、其余 4 字符 1 token」近似；预算是保护性上限不是精确配额。每轮真实上下文大小以用量里的 `prompt_tokens` 为准（界面已显示），两者对不上时信后者。 |
 
 ### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条）
@@ -1061,5 +1089,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-24（第十二次） | **上下文按 token 预算截断**。新增 `llm.max-history-tokens`（默认 24000，`LLM_MAX_HISTORY_TOKENS`）：`recentHistory` 从最近一条往前累加估算 token（思考也计入），与条数上限谁先满足谁生效，一次最多扫 200 条，且至少保留最新一条。实测：30 条 2000 字长消息只送 12 条进模型（prompt_tokens=5513，与推算吻合）。13.2 加第 24 条（估算是近似，真实值看 prompt_tokens） |
 | 2026-09-24（第十三次） | **图片输入（多模态）**。新增第 4 张表 `attachment`（图片字节存 LONGBLOB）+ `entity/Attachment.java` / `repository/AttachmentRepository.java` / `service/AttachmentService.java` / `controller/AttachmentController.java` / `dto/AttachmentVO.java` / `llm/LlmContentPart.java`；接口 13 → 15 个（`POST /{id}/attachments` multipart、`GET /api/attachments/{id}` 带鉴权出字节）。`LlmMessage.content` 从 String 变 Object（纯文本发字符串、带图发 `[{image_url},{text}]` 数组），`recentHistory` 把附件 base64 内联进历史；`ChatRequest` 加 `attachmentIds` 并**去掉 `@NotBlank`**（纯图片提问合法）；新增 `llm.vision-models` 白名单 + `LlmOptionsVO.visionModels`，带图打到非视觉模型直接 400。前端：`AttachmentThumb.vue`（fetch blob → objectURL，自己 revoke）、输入框「图片」按钮 + 粘贴 + 拖拽、待发送缩略图条、气泡缩略图。配置加 multipart 上限，`GlobalExceptionHandler` 接 413 / 缺字段。实测：4 个模型在兼容协议下都正确读图（320×200 测试图答对形状与颜色）、多轮追问仍带图、重新生成自动带图、9 条负路径（跨会话 / 重复用 / 非视觉 / 超限 / 空消息）全部按预期报错。13.1 删掉「无多模态」重排为 7 条，13.2 加 25~28 条，13.3 追加一条旧偏差 |
 | 2026-09-25（第十四次） | **前端传输层抽离**（为「和聊天平级的功能模块」铺路，纯重构、零行为变化）。新增 `chatbot-web/src/api/client.ts`，把 `api.ts` 里的 `BASE` / `request<T>()` / `withAuth()` / `extractErrorMessage()` **原样搬过去并导出**（`BASE` 更名 `API_BASE`）；`api.ts` 只剩接口清单，改动为「文件头换成两行 import + 3 处 `${BASE}` 改名」。401 仍然调 `clearSession()`，登录态与接口行为与改前完全一致。4.4 第 6 条同步改写：新模块另开 `src/api/<模块>.ts`。`npm run type-check` 与 `npm run build` 均通过 |
+| 2026-09-25（第十五次） | **引入 vue-router@4：URL 即模块**。新增 `router/{index,routes,guards,paths}.ts`、`session.ts`、`layouts/AppShell.vue`、`components/ModuleNav.vue`、`components/icons/IconChat.vue`、`views/{ForbiddenView,NotFoundView}.vue`；`main.ts` 挂 router，`App.vue` 从「三分支权限闸门」改成 `RouterView` + 对 `isAuthenticated` 的全局 watch（掉登录态回登录页的唯一兜底，同时覆盖 401 与主动退出登录），`LoginView` 登录成功后 `router.replace(safeNextPath(next) ?? /chat)`。URL：`/login`、`/chat`、`/403`、404 兜底；平级模块挂 `AppShell` 子路由，导航条目由 `routes.ts` 的 meta 派生（加模块不改导航与守卫）。`ChatView.vue` **零改动**。实测：`/` → `/chat`、未登录 `/chat` → `/login?next=/chat`、`?next=//evil.com` 被拒、SSE 全链路正常、退出登录回登录页、未知路径 404 页带导航条。〇 的「刻意没有 vue-router」删除、一 技术栈加 vue-router、13.2 加 29~32 条 |
 *最后更新：2026-09-25*
 

@@ -34,10 +34,13 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 | `src/auth.ts` | `token` / `currentUser` 是模块级 `ref`，持久化到 `localStorage`；`isAuthenticated` / `isAdmin` 是 computed；`clearSession()` 清空本地登录态 |
 | `src/api/client.ts` | **全站唯一的传输层**：统一挂 `Authorization: Bearer`、统一处理 401（`clearSession()`）；不 import router，避免和 `router → guards → api` 形成循环依赖 |
 | `src/api.ts` | 聊天与登录的**接口清单** + SSE 读流。新增别的平级功能模块请另开 `src/api/<模块>.ts`，同样只用 `client.ts` 的 `request()` |
-| `src/App.vue` | **权限闸门**：启动时调 `GET /api/auth/me` 验证 token，成功前渲染 `LoginView`，成功后渲染 `ChatView` |
+| `src/App.vue` | `RouterView` + 对 `isAuthenticated` 的全局 watch：登录态一旦消失（401 / 主动退出 / 被禁用）就把界面送回 `/login?next=` |
+| `src/router/guards.ts` | **权限闸门**：`beforeEach` 先 `await ensureSession()`（本地有 token 才问后端、且只问一次），再按 `meta.public` / `meta.requiresAdmin` 放行或跳 `/login?next=` / `/403` |
+| `src/session.ts` | `ensureSession()`：把原来 App.vue onMounted 里的「验证本地 token」搬进守卫，promise 按页面加载缓存 |
+| `src/router/routes.ts` | **模块注册表**：加一个平级模块 = 在这里加一条带 `meta.moduleId` 的路由记录，导航与守卫自动生效 |
 
-任何接口返回 **401 都当作「会话已失效」**：`api/client.ts` 调 `clearSession()`，`App.vue` 随之弹回登录页。
-因此不存在绕过登录能访问的页面，也不需要路由守卫。
+任何接口返回 **401 都当作「会话已失效」**：`api/client.ts` 调 `clearSession()`，App.vue 的 watch 随之把界面送回登录页（带上 `?next=`，登录后回原页）。
+因此不存在绕过登录能访问的 URL：闸门在 `router/guards.ts` 里，直接在地址栏输地址也一样拦。
 
 > **侧边栏就是「我的会话」**：后端按 `conversation.owner_id` 隔离，换账号登录看到的是另一个人的列表。
 > 越权访问别人的会话后端返回 404，前端当成「会话不存在」处理即可，不需要额外分支。
@@ -116,12 +119,17 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
       api.ts        聊天与登录的接口清单、SSE 读流、消息分页参数
       auth.ts       登录态：token / currentUser / isAdmin
       types.ts      类型定义，与后端 DTO / VO 一一对应
+      session.ts    ensureSession()：本地 token 的一次性有效性确认（守卫里 await）
+      router/       index（createRouter）/ routes（模块注册表）/ guards（登录与角色闸门）/ paths（路径常量）
+      layouts/      AppShell.vue：左侧模块导航 + 内容区外壳，平级模块都挂在它下面
       lib/markdown.ts  markdown-it + highlight.js + DOMPurify：助手消息的 Markdown 渲染
-      App.vue       根组件 = 权限闸门
-      main.ts       入口
+      App.vue       RouterView + 掉登录态回登录页的全局 watch
+      main.ts       入口：createApp(App).use(router).mount('#app')
       views/
-        LoginView.vue   登录页
+        LoginView.vue   登录页（顶层路由，不在外壳里）
         ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 / 模型 / 思考强度 + 停止生成
+        ForbiddenView.vue  /403：已登录但权限不够
+        NotFoundView.vue   其余一切路径的兜底
       components/
         ConversationSidebar.vue   会话列表，按 updated_at 倒序，支持新建 / 删除 / 双击改名
         MessageBubble.vue         消息气泡，区分 user / assistant；助手消息走 Markdown、用户消息纯文本 + 图片缩略图 + 思考折叠 + 重新生成按钮
@@ -131,6 +139,17 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
         SystemPromptDialog.vue    系统提示词（人设），所有人可见；保存后下一条消息立即生效
         UserListDialog.vue        用户管理，仅 isAdmin 时可见
         UserMenu.vue              顶栏头像下拉：用户管理 / 系统提示词 / 修改密码 / 退出登录
+        ModuleNav.vue             左侧模块导航条，条目从 routes.ts 的 meta.moduleId 派生
+        icons/                    导航图标（24×24 描边、stroke=currentColor）
       assets/main.css
 
-新增页面：在 `views/` 下加组件，在 `App.vue` 里按条件切换渲染（没有 router）。
+新增页面 / 平级功能模块：在 `views/` 下加组件，在 `router/routes.ts` 里加一条路由记录。
+带上 `meta.moduleId` / `title` / `icon` / `order` 就会自动出现在左侧模块导航条上；
+带上 `meta.requiresAdmin` 守卫就会自动拦成 `/403`。导航组件与守卫都不用改。
+
+## 路由与部署
+
+- history 模式（URL 里没有 `#`）：`/login`、`/chat`、`/403`，其余路径落 404 页。
+- 开发期 Vite 自带回退；**生产部署必须让静态服务器把未命中路径回退到 `index.html`**
+  （nginx：`try_files $uri /index.html`），否则直接访问或刷新 `/admin/users` 会拿到服务器 404。
+- 登录页是顶层路由（不进外壳），其余页面都挂在 `layouts/AppShell.vue` 下：左侧 56px 模块导航 + 内容区。
