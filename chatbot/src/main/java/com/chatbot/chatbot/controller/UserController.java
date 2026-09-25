@@ -1,20 +1,16 @@
 package com.chatbot.chatbot.controller;
 
 import com.chatbot.chatbot.auth.CurrentUser;
-import com.chatbot.chatbot.auth.RequireAdmin;
 import com.chatbot.chatbot.dto.ChangePasswordRequest;
 import com.chatbot.chatbot.dto.LoginResponse;
 import com.chatbot.chatbot.dto.UpdateSystemPromptRequest;
 import com.chatbot.chatbot.dto.UserVO;
 import com.chatbot.chatbot.service.UserService;
 import jakarta.validation.Valid;
-import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-
-import java.util.List;
 
 @RestController
 @RequestMapping("/api/users")
@@ -44,12 +40,5 @@ public class UserController {
     public UserVO updateSystemPrompt(CurrentUser currentUser,
                                      @Valid @RequestBody UpdateSystemPromptRequest request) {
         return userService.updateSystemPrompt(currentUser, request);
-    }
-
-    /** 用户列表，仅管理员；普通用户拿 403。列表里不带任何人的 systemPrompt。 */
-    @GetMapping
-    @RequireAdmin
-    public List<UserVO> list() {
-        return userService.list();
     }
 }

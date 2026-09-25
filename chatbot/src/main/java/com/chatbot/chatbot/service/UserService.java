@@ -17,7 +17,6 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.UUID;
 
 @Service
@@ -68,13 +67,6 @@ public class UserService {
 
     public UserVO me(CurrentUser currentUser) {
         return UserVO.from(requireUser(currentUser.id()));
-    }
-
-    /** 全部用户。权限由 UserController 上的 @RequireAdmin 保证，这里不重复判断；systemPrompt 一律不带出。 */
-    public List<UserVO> list() {
-        return userRepository.findAllByOrderByIdAsc().stream()
-                .map(u -> UserVO.from(u, false))
-                .toList();
     }
 
     /**

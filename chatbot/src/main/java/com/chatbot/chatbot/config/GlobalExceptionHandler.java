@@ -2,6 +2,7 @@ package com.chatbot.chatbot.config;
 
 import com.chatbot.chatbot.dto.ErrorResponse;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -63,6 +64,20 @@ public class GlobalExceptionHandler {
     public ResponseEntity<ErrorResponse> handleMissingPart(MissingServletRequestPartException ex,
                                                            HttpServletRequest request) {
         return build(HttpStatus.BAD_REQUEST.value(), "缺少上传字段: " + ex.getRequestPartName(), request);
+    }
+
+    /**
+     * 唯一索引 / 外键冲突（管理端建号撞用户名、并发删除撞上 RESTRICT 等）。
+     * 不接住就是 500 + 一屏堆栈，用户只看到「操作失败」，分不清是名字被占了还是自己点慢了。
+     * <p>
+     * 文案刻意不说是哪张表哪个约束：数据库结构不该通过错误响应泄漏出去。
+     * service 里能提前查出来的冲突（建号前先查重名）仍然给精确文案，这里只兜竞态和漏网的情况。
+     * 仍然不是 catch-all：只接这一类可预期的并发冲突，别把真 bug 也翻译成 400。
+     */
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolation(DataIntegrityViolationException ex,
+                                                                      HttpServletRequest request) {
+        return build(HttpStatus.BAD_REQUEST.value(), "数据冲突，请刷新后重试（例如用户名已被占用）", request);
     }
 
     /** 请求体不是合法 JSON。 */

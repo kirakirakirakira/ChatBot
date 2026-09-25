@@ -2,21 +2,22 @@ package com.chatbot.chatbot.repository;
 
 import com.chatbot.chatbot.entity.User;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Optional;
 
-public interface UserRepository extends JpaRepository<User, Long> {
+/**
+ * 多继承一个 JpaSpecificationExecutor 是给管理端用户列表的动态查询用的（见 UserSpecifications）：
+ * JpaRepository 本身不带 Specification 支持，不显式声明就没有 findAll(Specification, Pageable)。
+ */
+public interface UserRepository extends JpaRepository<User, Long>, JpaSpecificationExecutor<User> {
 
     /** 登录用：按用户名精确查（username 上有唯一索引）。 */
     Optional<User> findByUsername(String username);
-
-    /** 管理员看的用户列表，按 id 升序：初始 admin 排第一。 */
-    List<User> findAllByOrderByIdAsc();
 
     /**
      * 登录成功时记一笔最近登录时间。
@@ -26,4 +27,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Modifying
     @Query("update User u set u.lastLoginAt = :now where u.id = :id")
     void touchLastLogin(@Param("id") Long id, @Param("now") LocalDateTime now);
+
+    /**
+     * 「系统至少保留一个启用的管理员」这道闸的计数：管理端要降级 / 禁用 / 删除一个启用的管理员之前先数一次。
+     * 只数 (role, status) 两列，不把管理员名单拉进内存，service 里也就不用手写角色判断。
+     */
+    long countByRoleAndStatus(Integer role, Integer status);
 }

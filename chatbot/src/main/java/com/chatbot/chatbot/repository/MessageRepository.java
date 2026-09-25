@@ -43,4 +43,14 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     @Modifying
     @Query("delete from Message m where m.conversation.id = :conversationId")
     void deleteByConversationId(@Param("conversationId") Long conversationId);
+
+    /**
+     * 删用户时连带删他的全部消息，理由同 deleteByConversationId（content 是 LONGTEXT，逐条 select 不值）。
+     * 用子查询而不是多级隐式连接，理由同 AttachmentRepository.deleteByOwnerId。
+     * 必须排在删会话之前：fk_message_conversation 是 RESTRICT。
+     */
+    @Modifying
+    @Query("delete from Message m where m.conversation.id in "
+            + "(select c.id from Conversation c where c.owner.id = :ownerId)")
+    void deleteByOwnerId(@Param("ownerId") Long ownerId);
 }

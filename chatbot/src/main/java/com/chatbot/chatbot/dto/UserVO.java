@@ -20,17 +20,14 @@ public record UserVO(
         LocalDateTime createdAt,
         Boolean mustChangePassword) {
 
-    public static UserVO from(User user) {
-        return from(user, true);
-    }
-
     /**
-     * @param includeSystemPrompt 管理员看用户列表时传 false：别人的人设属于个人设置，
-     *                            不该因为「管理员能列用户」就顺带全看见。自己的 /me 和登录响应才带。
+     * systemPrompt 只在这里带出：调用方是登录、/me、改密码、改人设这些「本人」的响应。
+     * 管理员视角的列表走 AdminUserVO，那边连 systemPrompt 字段都没有——
+     * 「能列用户」不等于「能看别人的人设」。
      */
-    public static UserVO from(User user, boolean includeSystemPrompt) {
+    public static UserVO from(User user) {
         return new UserVO(user.getId(), user.getUsername(), user.getRole(),
-                Roles.label(user.getRole()), includeSystemPrompt ? user.getSystemPrompt() : null, user.getCreatedAt(),
+                Roles.label(user.getRole()), user.getSystemPrompt(), user.getCreatedAt(),
                 Boolean.TRUE.equals(user.getMustChangePassword()));
     }
 }

@@ -33,4 +33,15 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
     @Modifying
     @Query("update Conversation c set c.title = :title where c.id = :id and c.owner.id = :ownerId")
     int updateTitle(@Param("id") Long id, @Param("ownerId") Long ownerId, @Param("title") String title);
+
+    /**
+     * 删用户时连带删他的全部会话：管理员删号不该留下一堆 owner_id 指向不存在用户的孤儿会话。
+     * <p>
+     * 顺序上它夹在中间——必须排在删附件 / 消息之后（它们是 RESTRICT 的子表），
+     * 又必须排在删 sys_user 之前（fk_conversation_owner 也是 RESTRICT，先删用户行会撞 errno 1451）。
+     * 完整顺序见 AdminUserService.delete。
+     */
+    @Modifying
+    @Query("delete from Conversation c where c.owner.id = :ownerId")
+    void deleteByOwnerId(@Param("ownerId") Long ownerId);
 }

@@ -46,4 +46,17 @@ public interface AttachmentRepository extends JpaRepository<Attachment, Long> {
     @Modifying
     @Query("delete from Attachment a where a.conversation.id = :conversationId")
     void deleteByConversationId(@Param("conversationId") Long conversationId);
+
+    /**
+     * 删用户时连带删他的全部附件。同 deleteByConversationId 的理由：派生删除会先 select 再逐条 delete，
+     * 而这张表带 LONGBLOB，逐条查出来等于把人家所有图片搬进内存再扔掉。
+     * <p>
+     * 用子查询而不是 a.conversation.owner.id 这种多级隐式连接：批量 DML 里的隐式 join
+     * 各家 JPA 实现支持程度不一，子查询在 MySQL 上稳定生成一条 DELETE ... WHERE conversation_id IN (...)。
+     * 必须排在删会话之前：fk_attachment_conversation 是 RESTRICT。
+     */
+    @Modifying
+    @Query("delete from Attachment a where a.conversation.id in "
+            + "(select c.id from Conversation c where c.owner.id = :ownerId)")
+    void deleteByOwnerId(@Param("ownerId") Long ownerId);
 }
