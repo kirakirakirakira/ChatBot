@@ -130,7 +130,8 @@ chatbot/                        # 仓库根（git 仓库在这一层）
     └── src/
         ├── main.ts             # createApp(App).mount('#app')
         ├── App.vue             # 根组件 = 权限闸门
-        ├── api.ts              # fetch 封装 + 401 处理 + SSE 读流
+        ├── api.ts              # 聊天与登录的接口清单（传输层已抽到 api/client.ts）
+        ├── api/                # client.ts：fetch 封装 + Authorization 头 + 401 兜底，全站唯一一份
         ├── auth.ts             # 登录态（模块级 ref + localStorage）
         ├── types.ts            # 与后端 DTO/VO 一一对应的类型
         ├── assets/main.css     # 全局 CSS 变量 + 登录/弹窗共用件
@@ -353,7 +354,8 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `main.ts` | 5 | `import './assets/main.css'` + `createApp(App).mount('#app')`。没有注册任何插件。 |
 | `App.vue` | 小 | **根组件 = 权限闸门**。`restoring` ref 初值 = 「本地是否有 token」；`onMounted` 里若有 token 就调 `fetchMe()` 验证并 `setSession()` 刷新用户信息（角色可能变了），失败则 `clearSession()`。模板三分支：`restoring` → 「正在恢复登录状态…」；`isAuthenticated` → `<ChatView/>`；否则 → `<LoginView/>`。**没有 router，页面切换就是这里换组件。** |
 | `auth.ts` | 小 | 登录态。导出 `ROLE_USER=0`/`ROLE_ADMIN=1`（与后端 `Roles` 对齐）、`token`/`currentUser`（模块级 `ref`，初值读 `localStorage` 的 `chatbot.token`/`chatbot.user`）、`isAuthenticated`/`isAdmin`（`computed`）、`setSession(token,user)`、`clearSession()`。`readStoredUser()` 对 JSON 解析失败返回 null（存坏了就当没登录）。**本文件不要 import api.ts**，否则和 `api.ts → auth.ts` 形成循环依赖。 |
-| `api.ts` | 中 | 所有后端调用。`BASE = '/api'`。内部 `request<T>(path, init)`：`withAuth()` 挂 `Authorization: Bearer`、非 2xx 时 `extractErrorMessage()` 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（App.vue 随即弹回登录页）、204 返回 `undefined`。导出：`login`、`fetchMe`、`changePassword`、`listUsers`、`createConversation`、`listConversations`、`getMessages`（带 `{before, limit}` 分页参数，返回 `MessagePage`）、`deleteConversation`、`renameConversation`、`updateSystemPrompt`、`fetchLlmOptions`、`uploadAttachment(conversationId, file)`（FormData，**不手动设 Content-Type**）、`fetchAttachmentUrl(id)`（**fetch 成 blob 再转 objectURL**：img 标签带不了 Authorization 头）、`streamChat` / `streamRegenerate`（**共用 `consumeSse()` 解析 SSE、`pickStreamOptions()` 拼请求体**，不存在第二份 SSE 契约）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
+| `api/client.ts` | 小 | **全站唯一的 HTTP 传输层**（2026-09-25 从 `api.ts` 抽出）。导出 `API_BASE='/api'`、`request<T>(path, init)`、`withAuth(headers?)`、`extractErrorMessage(response)`。`request()` 的口径：挂 `Authorization: Bearer`、非 2xx 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（界面随即弹回登录页）、204 返回 `undefined`。抽出来的理由：项目要长出一批和聊天**平级的功能模块**，每个模块一个 api 文件互不干扰，但「挂鉴权头 + 401 清登录态」只能有一份实现，否则某个模块自己写 fetch 忘了处理 401，界面就会停在一张点什么都 401 的死页面上。**依赖方向刻意单向 `client.ts → auth.ts`**：本文件不 import router——反向 import 会形成 `router → guards → api → client → router` 的环，ESM 下表现为某个绑定初始化时还是 `undefined`，很难查。「掉登录态就回登录页」的兜底放在 `App.vue`，因为那条路径不止 401 一个入口（还有主动退出登录），兜底要兜在一个口子上。 |
+| `api.ts` | 中 | **聊天与登录的接口清单**：只描述「有哪些接口、请求体和响应长什么样」，传输层（fetch 封装 / 鉴权头 / 401 兜底）在 `api/client.ts`。新增别的平级模块请另开 `src/api/<模块>.ts`，不要往这里堆。导出：`login`、`fetchMe`、`changePassword`、`listUsers`、`createConversation`、`listConversations`、`getMessages`（带 `{before, limit}` 分页参数，返回 `MessagePage`）、`deleteConversation`、`renameConversation`、`updateSystemPrompt`、`fetchLlmOptions`、`uploadAttachment(conversationId, file)`（FormData，**不手动设 Content-Type**）、`fetchAttachmentUrl(id)`（**fetch 成 blob 再转 objectURL**：img 标签带不了 Authorization 头）、`streamChat` / `streamRegenerate`（**共用 `consumeSse()` 解析 SSE、`pickStreamOptions()` 拼请求体**，不存在第二份 SSE 契约）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
 | `types.ts` | 小 | 与后端一一对应：`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`（含 `model` / 三个 token 计数）、`CurrentUser`↔`UserVO`、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`（`done` 事件带用量）、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`（含 `visionModels`）、`Attachment`↔`AttachmentVO`；另有**纯前端**的 `AttachmentRef`（比 `Attachment` 多 `id: number|null` 与本地 `url?`）和 `UiMessage`（比 `Message` 多 `id: number\|null`、`reasoning?`、`error?`、`streaming?`、`model?`、用量三字段） |
 | `assets/main.css` | 中 | 全局设计变量（暖中性纸感浅色 / 深墨暗色，跟随系统 `prefers-color-scheme`）+ 半径 / 阴影 / 细滚动条 / 选区 / 焦点环 + **登录与四个弹窗共用的基础件**（`.field*` / `.btn-*` / `.alert-*` / `.modal-*`，放全局是因为长得一样、只写一份） |
 | `lib/markdown.ts` | 小 | markdown-it 实例 + 自定义 fence 渲染器（代码块包 `.code-block`、加语言标签和复制按钮）+ `renderMarkdown()`（渲染后过 DOMPurify）。**安全两道锁**：`html:false` 转义输入里的原始 HTML，DOMPurify 再兜一道；`breaks:true` 让单换行也换行。高亮只注册 highlight.js common 子集，认不出的语言原样输出不报错 |
@@ -458,7 +460,7 @@ App.vue  （权限闸门：restoring / isAuthenticated）
 3. 显式返回类型（`: Promise<void>`、`: string`），`tsconfig.app.json` 开了 `noUncheckedIndexedAccess`，数组下标访问要处理 `undefined`（代码里的 `messages.value[...]!` 就是为此）。
 4. 注释用中文，重点写「为什么」，尤其是踩过的坑。
 5. 新增页面：在 `views/` 下加组件，在 `App.vue` 里按条件切换渲染（**没有 router**）。
-6. 新增后端调用：统一加在 `api.ts`，类型加在 `types.ts`；**不要在组件里直接写 fetch**，否则丢掉 401 兜底。
+6. 新增后端调用：聊天 / 登录相关加在 `api.ts`，**别的平级功能模块另开 `src/api/<模块>.ts`**（模块内聚、互不干扰），类型加在 `types.ts`；两者都只能用 `api/client.ts` 的 `request()` / `withAuth()`，**不要在组件里直接写 fetch**，否则丢掉 401 兜底。
 7. 登录/弹窗类样式优先复用 `assets/main.css` 里的全局类，组件特有样式才写 `<style scoped>`。
 
 
@@ -1058,5 +1060,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-24（第十一次） | **联网搜索**。`LlmCallOptions` / `ChatRequest` / `RegenerateRequest` 加 `enableSearch`，OpenAI 兼容请求体在开启时下发 `enable_search: true`（策略固定默认 turbo）；输入条加「联网」pill（默认关、存 localStorage）；Mock 回显「【Mock 联网】」一行。实测：mock 链路开关生效；真实 key 全链路一发请求返回带当天日期的实时天气。13.1 加第 5 条（兼容协议无引用来源）、13.2 加第 23 条（计费与 agent 策略限制） |
 | 2026-09-24（第十二次） | **上下文按 token 预算截断**。新增 `llm.max-history-tokens`（默认 24000，`LLM_MAX_HISTORY_TOKENS`）：`recentHistory` 从最近一条往前累加估算 token（思考也计入），与条数上限谁先满足谁生效，一次最多扫 200 条，且至少保留最新一条。实测：30 条 2000 字长消息只送 12 条进模型（prompt_tokens=5513，与推算吻合）。13.2 加第 24 条（估算是近似，真实值看 prompt_tokens） |
 | 2026-09-24（第十三次） | **图片输入（多模态）**。新增第 4 张表 `attachment`（图片字节存 LONGBLOB）+ `entity/Attachment.java` / `repository/AttachmentRepository.java` / `service/AttachmentService.java` / `controller/AttachmentController.java` / `dto/AttachmentVO.java` / `llm/LlmContentPart.java`；接口 13 → 15 个（`POST /{id}/attachments` multipart、`GET /api/attachments/{id}` 带鉴权出字节）。`LlmMessage.content` 从 String 变 Object（纯文本发字符串、带图发 `[{image_url},{text}]` 数组），`recentHistory` 把附件 base64 内联进历史；`ChatRequest` 加 `attachmentIds` 并**去掉 `@NotBlank`**（纯图片提问合法）；新增 `llm.vision-models` 白名单 + `LlmOptionsVO.visionModels`，带图打到非视觉模型直接 400。前端：`AttachmentThumb.vue`（fetch blob → objectURL，自己 revoke）、输入框「图片」按钮 + 粘贴 + 拖拽、待发送缩略图条、气泡缩略图。配置加 multipart 上限，`GlobalExceptionHandler` 接 413 / 缺字段。实测：4 个模型在兼容协议下都正确读图（320×200 测试图答对形状与颜色）、多轮追问仍带图、重新生成自动带图、9 条负路径（跨会话 / 重复用 / 非视觉 / 超限 / 空消息）全部按预期报错。13.1 删掉「无多模态」重排为 7 条，13.2 加 25~28 条，13.3 追加一条旧偏差 |
-*最后更新：2026-09-24*
+| 2026-09-25（第十四次） | **前端传输层抽离**（为「和聊天平级的功能模块」铺路，纯重构、零行为变化）。新增 `chatbot-web/src/api/client.ts`，把 `api.ts` 里的 `BASE` / `request<T>()` / `withAuth()` / `extractErrorMessage()` **原样搬过去并导出**（`BASE` 更名 `API_BASE`）；`api.ts` 只剩接口清单，改动为「文件头换成两行 import + 3 处 `${BASE}` 改名」。401 仍然调 `clearSession()`，登录态与接口行为与改前完全一致。4.4 第 6 条同步改写：新模块另开 `src/api/<模块>.ts`。`npm run type-check` 与 `npm run build` 均通过 |
+*最后更新：2026-09-25*
 

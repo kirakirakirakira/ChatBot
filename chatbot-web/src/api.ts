@@ -1,3 +1,8 @@
+/**
+ * 聊天与登录相关的后端调用。本文件只描述「有哪些接口、请求体和响应长什么样」；
+ * fetch 封装、Authorization 头、401 兜底全在 @/api/client（全站只有一份）。
+ * 以后新增别的平级模块，请另开 src/api/<模块>.ts，不要往这里堆。
+ */
 import type {
   Attachment,
   ChatStreamEvent,
@@ -7,55 +12,8 @@ import type {
   LoginResult,
   MessagePage,
 } from '@/types'
-import { clearSession, token } from '@/auth'
-
-const BASE = '/api'
-
-/**
- * 普通 REST 请求。非 2xx 时尽量取后端 ErrorResponse 的 message 字段
- * （GlobalExceptionHandler 统一返回 {timestamp,status,error,message,path}）。
- *
- * 所有请求在这里统一挂 Authorization 头、统一处理 401：
- * 401 = 本地 token 过期或被作废（比如刚改过密码），清掉登录态之后
- * App.vue 里的 isAuthenticated 变 false，界面自动弹回登录页。
- * 这就是「所有界面都需要权限，否则跳回登录」的兜底，不用每个页面各写一遍。
- */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(BASE + path, { ...init, headers: withAuth(init?.headers) })
-  if (!response.ok) {
-    const message = await extractErrorMessage(response)
-    if (response.status === 401) {
-      clearSession()
-    }
-    throw new Error(message)
-  }
-  if (response.status === 204) {
-    return undefined as unknown as T
-  }
-  return (await response.json()) as T
-}
-
-async function extractErrorMessage(response: Response): Promise<string> {
-  const fallback = `请求失败（HTTP ${response.status}）`
-  try {
-    const data = (await response.json()) as { message?: string }
-    return data.message || fallback
-  } catch {
-    return fallback
-  }
-}
-
-/**
- * 给请求头加上 Authorization: Bearer <token>。
- * 用 Headers 对象合并，兼容调用方传进来的各种 HeadersInit 形态。
- */
-function withAuth(headers?: HeadersInit): HeadersInit {
-  const merged = new Headers(headers)
-  if (token.value) {
-    merged.set('Authorization', `Bearer ${token.value}`)
-  }
-  return merged
-}
+import { clearSession } from '@/auth'
+import { API_BASE, extractErrorMessage, request, withAuth } from '@/api/client'
 
 /** 登录：全站唯一不需要 token 的接口。成功后由调用方 setSession()。 */
 export function login(username: string, password: string): Promise<LoginResult> {
@@ -172,7 +130,7 @@ export function uploadAttachment(conversationId: number, file: File): Promise<At
  * 调用方负责在不用时 URL.revokeObjectURL()。
  */
 export async function fetchAttachmentUrl(attachmentId: number): Promise<string> {
-  const response = await fetch(`${BASE}/attachments/${attachmentId}`, { headers: withAuth() })
+  const response = await fetch(`${API_BASE}/attachments/${attachmentId}`, { headers: withAuth() })
   if (!response.ok) {
     const message = await extractErrorMessage(response)
     if (response.status === 401) {
@@ -238,7 +196,7 @@ export async function streamChat(
 ): Promise<void> {
   const body: Record<string, unknown> = { message, ...pickStreamOptions(options) }
 
-  const response = await fetch(`${BASE}/conversations/${conversationId}/chat`, {
+  const response = await fetch(`${API_BASE}/conversations/${conversationId}/chat`, {
     method: 'POST',
     headers: withAuth({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
     body: JSON.stringify(body),
@@ -264,7 +222,7 @@ export async function streamRegenerate(
   signal: AbortSignal,
 ): Promise<void> {
   const body: Record<string, unknown> = { ...pickStreamOptions(options) }
-  const response = await fetch(`${BASE}/conversations/${conversationId}/regenerate`, {
+  const response = await fetch(`${API_BASE}/conversations/${conversationId}/regenerate`, {
     method: 'POST',
     headers: withAuth({ 'Content-Type': 'application/json', Accept: 'text/event-stream' }),
     body: JSON.stringify(body),

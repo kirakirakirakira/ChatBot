@@ -32,10 +32,11 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 | 文件 | 职责 |
 |---|---|
 | `src/auth.ts` | `token` / `currentUser` 是模块级 `ref`，持久化到 `localStorage`；`isAuthenticated` / `isAdmin` 是 computed；`clearSession()` 清空本地登录态 |
-| `src/api.ts` | 统一挂 `Authorization: Bearer`，统一处理 401，SSE 读流 |
+| `src/api/client.ts` | **全站唯一的传输层**：统一挂 `Authorization: Bearer`、统一处理 401（`clearSession()`）；不 import router，避免和 `router → guards → api` 形成循环依赖 |
+| `src/api.ts` | 聊天与登录的**接口清单** + SSE 读流。新增别的平级功能模块请另开 `src/api/<模块>.ts`，同样只用 `client.ts` 的 `request()` |
 | `src/App.vue` | **权限闸门**：启动时调 `GET /api/auth/me` 验证 token，成功前渲染 `LoginView`，成功后渲染 `ChatView` |
 
-任何接口返回 **401 都当作「会话已失效」**：`api.ts` 调 `clearSession()`，`App.vue` 随之弹回登录页。
+任何接口返回 **401 都当作「会话已失效」**：`api/client.ts` 调 `clearSession()`，`App.vue` 随之弹回登录页。
 因此不存在绕过登录能访问的页面，也不需要路由守卫。
 
 > **侧边栏就是「我的会话」**：后端按 `conversation.owner_id` 隔离，换账号登录看到的是另一个人的列表。
@@ -111,7 +112,8 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
 ## 目录结构
 
     src/
-      api.ts        请求封装：鉴权头、401 处理、SSE 读流、消息分页参数
+      api/client.ts 传输层：fetch 封装、鉴权头、401 兜底（全站唯一一份）
+      api.ts        聊天与登录的接口清单、SSE 读流、消息分页参数
       auth.ts       登录态：token / currentUser / isAdmin
       types.ts      类型定义，与后端 DTO / VO 一一对应
       lib/markdown.ts  markdown-it + highlight.js + DOMPurify：助手消息的 Markdown 渲染
