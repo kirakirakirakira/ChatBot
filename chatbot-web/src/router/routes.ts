@@ -2,6 +2,7 @@ import { markRaw } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 import AppShell from '@/layouts/AppShell.vue'
 import IconChat from '@/components/icons/IconChat.vue'
+import IconUser from '@/components/icons/IconUser.vue'
 import IconUsers from '@/components/icons/IconUsers.vue'
 import LoginView from '@/views/LoginView.vue'
 import ChatView from '@/views/ChatView.vue'
@@ -58,6 +59,15 @@ export const routes: RouteRecordRaw[] = [
         name: 'chat',
         component: ChatView,
         meta: { moduleId: 'chat', title: '聊天', icon: markRaw(IconChat), order: 10 },
+      },
+      {
+        // 个人信息：每个登录用户都能进（不带 requiresAdmin），排在聊天之后、管理台之前。
+        // 懒加载：它不是落地页（落地页只有 /chat 享受静态 import 的待遇），
+        // 点进来才下载这一小块，首屏不用为它付钱。
+        path: 'profile',
+        name: 'profile',
+        component: () => import('@/views/ProfileView.vue'),
+        meta: { moduleId: 'profile', title: '个人信息', icon: markRaw(IconUser), order: 20 },
       },
       {
         // 第一个和聊天平级的功能模块。懒加载：普通用户不下载管理台代码。

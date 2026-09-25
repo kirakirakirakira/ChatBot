@@ -15,14 +15,19 @@ import java.time.LocalDateTime;
  * <p>
  * 不含 password 和 systemPrompt：哈希出网等于递给人一份可以离线慢慢爆破的素材。
  * roleLabel / statusLabel 由后端给出，前端不维护 0/1 到中文的映射（口径见 Roles.label / UserStatus.label）。
+ * <p>
+ * nickname / email 带上是给管理员「认人」用的：批量操作选错一个 id 的代价很高，
+ * 表格里只有登录名时，两个相似的账号很容易点错行。手机号刻意不带——管理列表用不上，少一列个人信息出网。
  */
 public record AdminUserVO(
         Long id,
         String username,
+        String nickname,
         Integer role,
         String roleLabel,
         Integer status,
         String statusLabel,
+        String email,
         LocalDateTime lastLoginAt,
         Boolean mustChangePassword,
         LocalDateTime createdAt,
@@ -34,8 +39,9 @@ public record AdminUserVO(
      */
     public static AdminUserVO from(User user, Integer actorRank) {
         boolean canManage = actorRank != null && Roles.rank(user.getRole()) < actorRank;
-        return new AdminUserVO(user.getId(), user.getUsername(), user.getRole(), Roles.label(user.getRole()),
-                user.getStatus(), UserStatus.label(user.getStatus()), user.getLastLoginAt(),
+        return new AdminUserVO(user.getId(), user.getUsername(), user.getNickname(), user.getRole(),
+                Roles.label(user.getRole()), user.getStatus(), UserStatus.label(user.getStatus()),
+                user.getEmail(), user.getLastLoginAt(),
                 Boolean.TRUE.equals(user.getMustChangePassword()), user.getCreatedAt(), canManage);
     }
 }

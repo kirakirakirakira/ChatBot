@@ -53,4 +53,16 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
     @Query("delete from Message m where m.conversation.id in "
             + "(select c.id from Conversation c where c.owner.id = :ownerId)")
     void deleteByOwnerId(@Param("ownerId") Long ownerId);
+
+    /**
+     * 某用户名下的消息总数（「个人信息」页的使用统计）。
+     * message 没有 owner_id 列，归属靠 conversation 传递，所以这里用子查询而不是多级隐式连接
+     * ——和 deleteByOwnerId 同一个理由。
+     * <p>
+     * 这是本项目唯一一处对 LONGTEXT 大表做全量 count 的地方，只在用户主动打开个人页时跑一次，
+     * 不在登录 / 聊天这类热路径上（见 UserProfileStatsVO 的注释）。
+     */
+    @Query("select count(m) from Message m where m.conversation.id in "
+            + "(select c.id from Conversation c where c.owner.id = :ownerId)")
+    long countByOwnerId(@Param("ownerId") Long ownerId);
 }

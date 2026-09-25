@@ -110,10 +110,24 @@ export interface UiMessage {
 export interface CurrentUser {
   id: number
   username: string
+  /**
+   * 昵称（展示名），在「个人信息」页维护；没设过为 null，界面一律回退显示 username
+   * （统一走 auth.ts 的 displayName，别在各组件里各写一遍 `?? username`）。
+   * 可选而不是必填：localStorage 里升级前存下的旧登录态没有这个字段。
+   */
+  nickname?: string | null
   /** 0=普通用户，1=管理员，2=超级管理员，3=访客；层级见后端 Roles.rank。 */
   role: number
   /** 后端给的中文角色名，直接展示，前端不用再维护一份映射。 */
   roleLabel: string
+  /** 0=启用，1=禁用。自己的账号恒为启用（禁用的账号下一个请求就 401 了），个人信息页照实展示。 */
+  status?: number
+  statusLabel?: string
+  /** 联系邮箱 / 电话，个人信息页可改；没填为 null。 */
+  email?: string | null
+  phone?: string | null
+  /** 最近一次登录成功的时间；本次登录之前的那一次。从没登录过为 null。 */
+  lastLoginAt?: string | null
   /** 该用户的系统提示词（人设）；没设过为 null。管理员的用户列表里恒为 null。 */
   systemPrompt?: string | null
   /**
@@ -139,8 +153,12 @@ export interface LoginResult {
 export interface AdminUser {
   id: number
   username: string
+  /** 昵称，没设为 null。表格里跟在登录名后面显示，帮管理员在批量勾选时确认「选的是这个人」。 */
+  nickname: string | null
   role: number
   roleLabel: string
+  /** 联系邮箱，没设为 null。刻意不带手机号：管理列表用不上，少一份个人信息出网。 */
+  email: string | null
   /** 0=启用，1=禁用，见后端 auth/UserStatus。 */
   status: number
   statusLabel: string
@@ -207,3 +225,62 @@ export interface AdminAuditLog {
   createdAt: string
 }
 
+/** ---------- 个人信息（本人视角，对应后端 /api/users/me/*） ---------- */
+
+/** GET /api/users/me/stats：我的使用统计。刻意不并进 /me，理由见后端 UserProfileStatsVO。 */
+export interface MyStats {
+  conversationCount: number
+  messageCount: number
+  attachmentCount: number
+}
+
+/** PUT /api/users/me/profile 的请求体。传空串 = 清空该字段（后端统一存 null）。 */
+export interface UpdateProfileBody {
+  nickname: string
+  email: string
+  phone: string
+}
+
+/** ---------- 管理台批量操作（POST /api/admin/users/batch） ---------- */
+
+/**
+ * 批量动作名，与后端 dto.BatchUserAction 一一对应。
+ * 后端用 String 接（而不是枚举）是为了给出「未知批量操作: xxx」这种中文 400，
+ * 前端这里保留字面量联合类型，写错动作名在 type-check 阶段就拦住。
+ */
+export type BatchUserAction = 'ENABLE' | 'DISABLE' | 'SET_ROLE' | 'RESET_PASSWORD' | 'REVOKE_SESSIONS' | 'DELETE'
+
+export interface BatchUserBody {
+  ids: number[]
+  action: BatchUserAction
+  /** action=SET_ROLE 时必填。 */
+  role?: number
+  /** action=RESET_PASSWORD 且 generate 不为 true 时必填：所有人设成同一个密码。 */
+  newPassword?: string
+  /** action=RESET_PASSWORD 时可用：true = 每人一个随机密码，明文只在本次响应里回显。 */
+  generate?: boolean
+}
+
+/** 批量结果里的一条。success=false 时 message 是后端给的中文原因，直接展示。 */
+export interface BatchUserItem {
+  id: number
+  /** 用户名快照；id 不存在时为 null。 */
+  username: string | null
+  success: boolean
+  message: string | null
+  /** 只在「批量重置密码 + 随机生成」的成功条上有值，且只出现这一次，关掉弹窗就再也查不回来。 */
+  generatedPassword: string | null
+  /** 成功且这一行有变化时回传最新数据，前端就地替换；删除 / 强制下线 / 重置密码 为 null。 */
+  user: AdminUser | null
+}
+
+/**
+ * 批量操作的响应。刻意是「逐条结果」而不是一个总数：
+ * 批量里失败是常态（自己的行、层级不低于自己的行、最后一个启用的管理员），只给总数就得让人自己猜哪几行没动。
+ */
+export interface BatchUserResult {
+  requested: number
+  succeeded: number
+  failed: number
+  items: BatchUserItem[]
+}

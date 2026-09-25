@@ -37,7 +37,7 @@ public class User {
     @Column(nullable = false, length = 100)
     private String password;
 
-    /** 角色，取值见 auth.Roles：0=普通用户，1=管理员。 */
+    /** 角色，取值见 auth.Roles：0=普通用户，1=管理员，2=超级管理员，3=访客（层级模型）。 */
     @Column(nullable = false)
     private Integer role;
 
@@ -77,6 +77,26 @@ public class User {
      */
     @Column(name = "must_change_password", nullable = false, columnDefinition = "tinyint(1) not null default 0")
     private Boolean mustChangePassword = Boolean.FALSE;
+
+    /**
+     * 昵称（展示名），本人在「个人信息」页维护；NULL = 没设，界面回退到 username。
+     * <p>
+     * 只做展示，**不参与任何鉴权与查询**：登录名永远是 username，审计日志里存的也是 username 快照。
+     * 所以改昵称不会让「谁干的」这条线索断掉，也不给「改个名字冒充别人」留口子。
+     */
+    @Column(length = 50)
+    private String nickname;
+
+    /** 联系邮箱，可空。格式校验只放在 dto.UpdateProfileRequest 上，实体不再抄一份规则。 */
+    @Column(length = 100)
+    private String email;
+
+    /**
+     * 联系电话，可空。刻意不做格式校验：区号 / 分机 / 国际号码写法太多，
+     * 写死正则的结果只是逼人填一个假的，还不如只卡长度。
+     */
+    @Column(length = 30)
+    private String phone;
 
     @PrePersist
     void onCreate() {
@@ -153,5 +173,29 @@ public class User {
 
     public void setMustChangePassword(Boolean mustChangePassword) {
         this.mustChangePassword = mustChangePassword;
+    }
+
+    public String getNickname() {
+        return nickname;
+    }
+
+    public void setNickname(String nickname) {
+        this.nickname = nickname;
+    }
+
+    public String getEmail() {
+        return email;
+    }
+
+    public void setEmail(String email) {
+        this.email = email;
+    }
+
+    public String getPhone() {
+        return phone;
+    }
+
+    public void setPhone(String phone) {
+        this.phone = phone;
     }
 }

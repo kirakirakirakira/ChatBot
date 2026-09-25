@@ -4,7 +4,15 @@
  * 刻意不放进 api.ts：api.ts 是「聊天与登录」的接口清单，平级功能模块各开一个文件，
  * 互不干扰、也不会两个人同时改一个文件。传输层（鉴权头 / 401 兜底）仍然只有 api/client.ts 一份。
  */
-import type { AdminAuditLog, AdminUser, Page, ResetPasswordResult, UserAdminOptions } from '@/types'
+import type {
+  AdminAuditLog,
+  AdminUser,
+  BatchUserBody,
+  BatchUserResult,
+  Page,
+  ResetPasswordResult,
+  UserAdminOptions,
+} from '@/types'
 import { request } from '@/api/client'
 
 /** 列表查询条件。keyword 空串等同于不传。 */
@@ -65,6 +73,21 @@ export function updateUserStatus(id: number, status: number): Promise<AdminUser>
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),
+  })
+}
+
+/**
+ * 批量操作：一次一个动作，作用于一批 id（上限 100，后端会去重）。
+ *
+ * 返回**逐条结果**而不是一个总数：批量里失败是常态（自己的行、层级不低于自己的行、
+ * 最后一个启用的管理员），后端逐条独立提交、逐条报原因，界面照实摊开给人看。
+ * 也正因为不是一个大事务，「成功 3 条 / 失败 1 条」是正常结果，不是需要重试的错误。
+ */
+export function batchAdminUsers(body: BatchUserBody): Promise<BatchUserResult> {
+  return request<BatchUserResult>('/admin/users/batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
   })
 }
 

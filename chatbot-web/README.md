@@ -1,7 +1,7 @@
 # chatbot-web 前端
 
-Chatbot 的 Vue 3 前端：登录闸门 + 会话侧边栏 + SSE 流式对话。
-**没有 vue-router**——页面切换就是换根组件。
+Chatbot 的 Vue 3 前端：登录闸门 + 会话侧边栏 + SSE 流式对话 + 平级功能模块（个人信息 / 用户管理 / 操作记录）。
+路由用 **vue-router 4**（history 模式）：URL 即模块，权限闸门在 `router/guards.ts`，外壳在 `layouts/AppShell.vue`。
 
 > 启动步骤见仓库根目录 [README.md](../README.md)，架构全貌见 [PROJECT_OVERVIEW.md](../PROJECT_OVERVIEW.md)。
 > 本文只写前端自身的实现约定。
@@ -23,7 +23,10 @@ npm run type-check   # vue-tsc --build，单独跑类型检查
 ## 后端地址
 
 前端代码里**不写死后端地址**。`vite.config.ts` 把 `/api` 代理到 `http://localhost:8089`，
-REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，不要动业务代码。
+REST 和 SSE 都走这一条代理。默认值可用环境变量覆盖：`BACKEND_URL=http://localhost:8099 npm run dev`
+就能把第二个前端指到另一个后端实例上（本机已有一个 8089 在跑、又想验证新代码时用它，不用动别人的进程）。
+**注意**：浏览器对同源 POST 也会带 `Origin` 头，换了端口就要把新源加进后端 `CORS_ALLOWED_ORIGINS`，
+否则登录会拿到空响应体的 403（界面只显示「请求失败（HTTP 403）」，很容易误判成密码错）。
 
 同文件里还配了路径别名 `@` → `./src`，以及 `vite-plugin-vue-devtools`。
 
@@ -31,9 +34,9 @@ REST 和 SSE 都走这一条代理。后端换端口只改 `vite.config.ts`，�
 
 | 文件 | 职责 |
 |---|---|
-| `src/auth.ts` | `token` / `currentUser` 是模块级 `ref`，持久化到 `localStorage`；`isAuthenticated` / `isAdmin` 是 computed；`clearSession()` 清空本地登录态 |
+| `src/auth.ts` | `token` / `currentUser` 是模块级 `ref`，持久化到 `localStorage`；`isAuthenticated` / `isAdmin` / `isSuperAdmin` 是 computed；`displayName`（昵称优先、回退登录名，头像首字母与各处显示名共用）；`clearSession()` 清空本地登录态 |
 | `src/api/client.ts` | **全站唯一的传输层**：统一挂 `Authorization: Bearer`、统一处理 401（`clearSession()`）；不 import router，避免和 `router → guards → api` 形成循环依赖 |
-| `src/api.ts` | 聊天与登录的**接口清单** + SSE 读流。新增别的平级功能模块请另开 `src/api/<模块>.ts`，同样只用 `client.ts` 的 `request()` |
+| `src/api.ts` | 聊天、登录与「管自己」的**接口清单**（含 `updateMyProfile` / `fetchMyStats` / `revokeMySessions`）+ SSE 读流。新增别的平级功能模块请另开 `src/api/<模块>.ts`，同样只用 `client.ts` 的 `request()` |
 | `src/App.vue` | `RouterView` + 对 `isAuthenticated` 的全局 watch：登录态一旦消失（401 / 主动退出 / 被禁用）就把界面送回 `/login?next=` |
 | `src/router/guards.ts` | **权限闸门**：`beforeEach` 先 `await ensureSession()`（本地有 token 才问后端、且只问一次），再按 `meta.public` / `meta.requiresAdmin` 放行或跳 `/login?next=` / `/403` |
 | `src/session.ts` | `ensureSession()`：把原来 App.vue onMounted 里的「验证本地 token」搬进守卫，promise 按页面加载缓存 |
@@ -117,8 +120,8 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
     src/
       api/client.ts 传输层：fetch 封装、鉴权头、401 兜底（全站唯一一份）
       api.ts        聊天与登录的接口清单、SSE 读流、消息分页参数
-      api/userAdmin.ts  用户管理模块接口（/api/admin/users 八个 + /api/admin/audit）；新模块照这个开新文件
-      auth.ts       登录态：token / currentUser / isAdmin
+      api/userAdmin.ts  用户管理模块接口（/api/admin/users 九个（含批量）+ /api/admin/audit）；新模块照这个开新文件
+      auth.ts       登录态：token / currentUser / isAdmin / displayName
       types.ts      类型定义，与后端 DTO / VO 一一对应（含管理端 AdminUser / Page / UserAdminOptions）
       session.ts    ensureSession()：本地 token 的一次性有效性确认（守卫里 await）
       router/       index（createRouter）/ routes（模块注册表）/ guards（登录与角色闸门）/ paths（路径常量）
@@ -129,7 +132,8 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
       views/
         LoginView.vue   登录页（顶层路由，不在外壳里）
         ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 / 模型 / 思考强度 + 停止生成
-        admin/UsersView.vue  用户管理（/admin/users）：表格 + 筛选 + 分页 + 各操作弹窗
+        ProfileView.vue 个人信息（/profile）：资料表单 + 账号信息 + 使用统计 + 安全区（改人设 / 改密码 / 退出所有设备）
+        admin/UsersView.vue  用户管理（/admin/users）：表格 + 筛选 + 分页 + 多选与批量操作条 + 各操作弹窗
         admin/AuditView.vue  操作记录（/admin/audit）：只读审计列表，无清空按钮
         ForbiddenView.vue  /403：已登录但权限不够
         NotFoundView.vue   其余一切路径的兜底
@@ -140,12 +144,14 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
         MarkdownContent.vue       Markdown 渲染容器：代码高亮 + 代码块复制按钮 + 流式光标
         ChangePasswordDialog.vue  修改密码；force 模式下关不掉（管理员重置过密码时由外壳弹出）
         SystemPromptDialog.vue    系统提示词（人设），所有人可见；保存后下一条消息立即生效
-        UserMenu.vue              顶栏头像下拉：用户管理（跳 /admin/users）/ 系统提示词 / 修改密码 / 退出登录
-        ModuleNav.vue             左侧模块导航条（条目从 routes.ts 派生）+ 底部账号按钮 / 退出登录
+        UserMenu.vue              顶栏头像下拉：个人信息 / 用户管理（跳 /admin/users）/ 系统提示词 / 修改密码 / 退出登录
+        ModuleNav.vue             左侧模块导航条（条目从 routes.ts 派生）+ 底部账号菜单（个人信息 / 用户管理 / 操作记录 / 退出登录，**贴导航条右侧弹出**，居中会出屏）
         common/ConfirmDialog.vue  通用二次确认；requireText 非空时输入一致才点亮确认（删号用）
         admin/UserFormDialog.vue  新建用户（可一键生成随机密码）
         admin/ResetPasswordDialog.vue  重置密码（随机密码只展示这一次）
-        icons/                    导航图标（24×24 描边、stroke=currentColor）
+        admin/BatchResetPasswordDialog.vue  批量重置密码（每人随机 / 统一一个，两种模式）
+        admin/BatchResultDialog.vue  批量结果窗：逐条成功 / 失败 + 一次性随机密码 + 复制全部
+        icons/                    导航图标（24×24 描边、stroke=currentColor）：IconChat / IconUser / IconUsers
       assets/main.css
 
 新增页面 / 平级功能模块：在 `views/` 下加组件，在 `router/routes.ts` 里加一条路由记录。
@@ -166,6 +172,10 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
 - `UserVO.mustChangePassword=true` 时外壳弹**关不掉的改密框**（管理员重置过密码），改完才能用任何模块。
 - 退出登录在导航条底部的账号按钮里：管理页没有聊天顶栏的头像菜单，退出是外壳级的事。
 - 管理台视图懒加载：构建产物里是独立分包，普通用户的 bundle 不含管理台代码。
+- `/profile` 是第一个**不带 `requiresAdmin`** 的平级模块：所有登录用户都能进，导航条对所有人显示。
+  它复用聊天页的 `ChangePasswordDialog` / `SystemPromptDialog`（强制改密语义、换发 token 的处理只有一份实现）。
+- 用户管理的勾选**只限当前页**，翻页 / 搜索 / 刷新即清空：不在眼前的人不该被一个「删除 17 个」的按钮带走。
+  批量结果用结果窗逐条摊开（失败带后端中文原因）——批量是逐条独立提交，「成功 3 / 失败 1」是正常结果而不是报错。
 - 角色层级（超管 > 管理员 > 普通用户 > 访客）决定「谁能管谁」：列表每行带 `canManage`，
   为 false 或是自己时，角色下拉换成纯文本、操作按钮全部 `disabled` 并带 tooltip——锁死而不是假可点。
   指派用的角色下拉取 `/options` 的 `roles`（按操作者层级过滤，下拉里根本没有越级选项）；列表的角色**筛选器**取

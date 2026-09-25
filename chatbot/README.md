@@ -35,7 +35,17 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
   审计表不建外键（管理员自己也可能被删）、应用层不开删除入口——能删的审计不叫审计。
 - **角色是层级模型**（`Roles.rank`）：超级管理员(2) > 管理员(1) > 普通用户(0) > 访客(3)，管理操作只允许「上对下」：
   管理员碰不到管理员 / 超管，谁都不能改自己的角色（界面锁死 + 后端 400），也不能指派不低于自己的角色。
-  种子账号是**超级管理员**；老库升级要手工把初始账号提为超管（`sql/init.sql` 升级段），否则永远建不出超管。
+  种子账号是**超级管理员**；老库（种子 role=1）要么手工执行 `sql/init.sql` 升级段那条 UPDATE，
+  要么直接启动新版后端——`SeedUserInitializer` 在「系统里一个启用的超管都没有」时会自动把种子账号提回来。
+- **批量操作 = 单条动作在一批 id 上跑一遍，不引入任何新规则**：`POST /api/admin/users/batch`
+  （启用 / 禁用 / 改角色 / 重置密码 / 强制下线 / 删除，`ids` 上限 100）。**逐条独立事务、响应逐条结果**：
+  勾选里混进一个不能动的人（自己 / 层级不低于自己 / 最后一个启用的管理员）时，那一条失败并带中文原因，
+  其余照做——「成功 3 / 失败 1」是正常结果，不是需要重试的错误。层级 / 自我保护 / 审计全部复用单条实现，
+  批量不是特权通道。逐条事务的编排单独成 Bean（`AdminUserBatchService`）：同类内 this 调用不走代理，事务会静默失效。
+- **「管自己」的接口有五个**：改密码、改人设、改资料（`PUT /api/users/me/profile`：昵称 / 邮箱 / 手机号）、
+  使用统计（`GET /api/users/me/stats`）、退出所有设备（`POST /api/users/me/revoke`，含当前这台，204）。
+  **登录名与角色不可自改**：username 是审计快照里「谁干的」的锚点，role / status 是管理端写口径，
+  放进「改自己的资料」就是现成的提权洞。改资料不换发 token（不是安全事件），改密码与 revoke 会作废旧登录态。
 - **带图请求打到不支持图片的模型会 400**（`llm.vision-models` 白名单），错误文案里列出可用模型。
   校验顺序是刻意的：附件合法性与模型白名单都在用户消息落库**之前**；只有「历史窗口里有旧图、用户刚换了非视觉模型」
   这一种情况会在落库后报 400——那种情况下用户消息还在，换回视觉模型点重新生成即可恢复。
@@ -130,7 +140,9 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 | server.port | 8089 | |
 | auth.token-secret | dev 占位值 | **少于 32 字符启动失败**，生产必须用环境变量覆盖 |
 | auth.token-ttl-hours | 12 | 过期返回 401，前端自动弹回登录页 |
-| auth.default-admin-username / -password | admin / admin | 仅在 `sys_user` 为空表时由 `AdminUserInitializer` 兜底创建，等价于 `init.sql` 里的 `INSERT IGNORE`；不会覆盖谁改过的密码 |
+| auth.default-admin-username / -password | admin / admin | 仅在 `sys_user` 为空表时由 `SeedUserInitializer` 兜底创建（**超级管理员**），等价于 `init.sql` 里的 `INSERT IGNORE`；不会覆盖谁改过的密码 |
+| auth.seed-test-users | true | 是否补齐每个角色一个测试账号（`test_super` / `test_admin` / `test_user` / `test_guest`），只在用户名不存在时创建。**生产环境用 `AUTH_SEED_TEST_USERS=false` 关掉** |
+| auth.test-user-password | test123456 | 测试账号的统一密码（入库前 BCrypt）。配置不合法时启动直接抛异常，不静默跳过 |
 | spring.datasource.url / username | localhost:3306/chatbot / root | 有 `DB_URL` / `DB_USERNAME` 占位符，换环境不用改文件 |
 | cors.allowed-origins | http://localhost:5173 | 跨域白名单，逗号分隔多个；**留空启动失败**。对外部署用 `CORS_ALLOWED_ORIGINS` 覆盖 |
 | llm.base-url | 百炼 compatible-mode | 任何 OpenAI 兼容接口都能直连 |
@@ -183,19 +195,22 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 
     auth/        TokenService（签发/校验）、AuthInterceptor（拦截 + 回表查用户）、CurrentUser 及其
                  ArgumentResolver、RequireAdmin 注解、Roles 常量、AuthProperties
-    controller/  REST 入口：Auth / Conversation / Chat / User / Attachment
-    service/     ChatService（SSE 编排、取消、历史截断、自动起标题、多模态历史拼装）、UserService（登录、改密码）、
-                 ConversationService（会话 CRUD + 消息分页 + 附件元信息分组）、AttachmentService（图片上传/校验/读取）
+    controller/  REST 入口：Auth / Conversation / Chat / User / Attachment / Llm / AdminUser / AdminAudit
+    service/     ChatService（SSE 编排、取消、历史截断、自动起标题、多模态历史拼装）、UserService（登录、改密码、改资料、统计）、
+                 ConversationService（会话 CRUD + 消息分页 + 附件元信息分组）、AttachmentService（图片上传/校验/读取）、
+                 AdminUserService（管理端单条增删改查 + 自我保护规则）、AdminUserBatchService（批量编排，逐条事务）、
+                 AdminAuditService（审计写与读）
     repository/  Spring Data JPA：Conversation / Message / User / Attachment
     entity/      Conversation / Message / User / Attachment / Role
     dto/         请求与响应对象，含统一错误体 ErrorResponse、SSE 事件体 ChatEvent、附件元信息 AttachmentVO
     llm/         LlmClient 接口 + LlmStreamListener（思考/回答双通道回调）+ Mock 与 OpenAI 兼容实现 +
                  LlmContentPart（多模态 content 数组的元素）
     config/      WebConfig（CORS + 拦截器 + 参数解析器）、CorsProperties（CORS 白名单）、
-                 AuthConfig（BCrypt）、LlmConfig、AdminUserInitializer、GlobalExceptionHandler
+                 AuthConfig（BCrypt）、LlmConfig、SeedUserInitializer（种子超管 + 超管自愈 + 测试账号）、GlobalExceptionHandler
 
 ## 后续待加
 
 暂无硬性缺口。候选方向（都已在 PROJECT_OVERVIEW.md 十二节展开）：把 `attachment.data` 换成对象存储 key
-（多实例部署的前提）、给「传了没发」的孤儿附件加定时清理、按 `usage` 回填做动态 token 预算（把图片 token 也算进去）、
-管理台审计日志与批量操作（见 PROJECT_OVERVIEW.md 13.1 第 7 条）。
+（多实例部署的前提）、给「传了没发」的孤儿附件加定时清理、按 `usage` 回填做动态 token 预算（把图片 token 也算进去）。
+管理台审计与批量操作已于 2026-09-25 落地（`/api/admin/audit` 与 `/api/admin/users/batch`）；
+审计目前只覆盖用户管理的写操作，其他管理模块接入时各自调 `AdminAuditService.record()`。

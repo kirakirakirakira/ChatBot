@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { displayName } from '@/auth'
 import type { CurrentUser } from '@/types'
 
 const props = defineProps<{
@@ -8,11 +9,19 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
+  profile: []
   users: []
   prompt: []
   password: []
   logout: []
 }>()
+
+/**
+ * 展示名与头像首字母都取自 auth.ts 的 displayName（昵称优先、回退登录名）：
+ * 左下角账号菜单、个人信息页用的是同一份逻辑，别在这里再写一遍 `nickname || username`。
+ */
+const avatarChar = computed(() => (displayName.value || '?').charAt(0).toUpperCase())
+const showUsername = computed(() => displayName.value !== props.user.username)
 
 /**
  * 顶栏只留一个头像按钮，其余入口收进下拉：
@@ -55,17 +64,22 @@ onBeforeUnmount(() => {
 
 <template>
   <div ref="root" class="user-menu">
-    <button class="avatar-btn" type="button" :title="user.username" @click="toggle">
-      <span class="avatar">{{ (user.username || '?').charAt(0).toUpperCase() }}</span>
+    <button class="avatar-btn" type="button" :title="displayName || user.username" @click="toggle">
+      <span class="avatar">{{ avatarChar }}</span>
       <svg class="chevron" :class="{ open }" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6" /></svg>
     </button>
 
     <div v-if="open" class="menu" role="menu">
       <div class="menu-head">
-        <div class="menu-name">{{ user.username }}</div>
+        <div class="menu-name" :title="displayName">{{ displayName }}</div>
         <div class="menu-role" :class="{ admin: isAdmin }">{{ user.roleLabel }}</div>
       </div>
+      <div v-if="showUsername" class="menu-username">@{{ user.username }}</div>
       <div class="menu-sep" />
+      <button class="menu-item" type="button" role="menuitem" @click="pick(() => emit('profile'))">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+        个人信息
+      </button>
       <button v-if="isAdmin" class="menu-item" type="button" role="menuitem" @click="pick(() => emit('users'))">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
         用户管理
@@ -162,6 +176,15 @@ onBeforeUnmount(() => {
   font-size: 13.5px;
   font-weight: 600;
   max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-username {
+  margin: -4px 10px 0;
+  font-size: 11.5px;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

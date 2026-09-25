@@ -6,9 +6,14 @@ import com.chatbot.chatbot.auth.UserStatus;
 import com.chatbot.chatbot.dto.ChangePasswordRequest;
 import com.chatbot.chatbot.dto.LoginRequest;
 import com.chatbot.chatbot.dto.LoginResponse;
+import com.chatbot.chatbot.dto.UpdateProfileRequest;
 import com.chatbot.chatbot.dto.UpdateSystemPromptRequest;
+import com.chatbot.chatbot.dto.UserProfileStatsVO;
 import com.chatbot.chatbot.dto.UserVO;
 import com.chatbot.chatbot.entity.User;
+import com.chatbot.chatbot.repository.AttachmentRepository;
+import com.chatbot.chatbot.repository.ConversationRepository;
+import com.chatbot.chatbot.repository.MessageRepository;
 import com.chatbot.chatbot.repository.UserRepository;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -19,12 +24,22 @@ import org.springframework.web.server.ResponseStatusException;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
+/**
+ * 「管自己」的那一半用户业务：登录、/me、改密码、改人设、改资料、看自己的使用统计。
+ * 「管别人」的全部在 {@link AdminUserService}。
+ * <p>
+ * 所有方法的目标用户 id 只来自 {@link CurrentUser}（token 解析结果），一律不接受请求体传 userId：
+ * 只要有一个入口能从请求里拿到 id，它就是越权改别人的洞。
+ */
 @Service
 public class UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final TokenService tokenService;
+    private final ConversationRepository conversationRepository;
+    private final MessageRepository messageRepository;
+    private final AttachmentRepository attachmentRepository;
 
     /**
      * 用户名不存在时也拿它做一次 BCrypt 比对：BCrypt 故意做慢，如果「用户不存在」直接返回，
@@ -34,10 +49,16 @@ public class UserService {
 
     public UserService(UserRepository userRepository,
                        PasswordEncoder passwordEncoder,
-                       TokenService tokenService) {
+                       TokenService tokenService,
+                       ConversationRepository conversationRepository,
+                       MessageRepository messageRepository,
+                       AttachmentRepository attachmentRepository) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.tokenService = tokenService;
+        this.conversationRepository = conversationRepository;
+        this.messageRepository = messageRepository;
+        this.attachmentRepository = attachmentRepository;
         this.dummyHash = passwordEncoder.encode(UUID.randomUUID().toString());
     }
 
@@ -76,10 +97,59 @@ public class UserService {
     @Transactional
     public UserVO updateSystemPrompt(CurrentUser currentUser, UpdateSystemPromptRequest request) {
         User user = requireUser(currentUser.id());
-        String prompt = (request.systemPrompt() == null) ? null : request.systemPrompt().strip();
-        user.setSystemPrompt((prompt == null || prompt.isEmpty()) ? null : prompt);
+        user.setSystemPrompt(blankToNull(request.systemPrompt()));
         userRepository.save(user);
         return UserVO.from(user);
+    }
+
+    /**
+     * 改自己的资料（昵称 / 邮箱 / 手机号）。
+     * <p>
+     * **不换发 token、也不动 passwordChangedAt**：改资料不是安全事件，不该把人踢下线
+     * （改密码和强制下线才需要作废登录态，语义刻意分开）。
+     * 返回整份 UserVO，前端拿它覆盖本地登录态，省一次 /me。
+     * <p>
+     * 不做「昵称唯一」约束：昵称是展示名，两个人都叫「小王」完全正常；
+     * 唯一的登录标识是 username，那个已经有唯一索引了。
+     */
+    @Transactional
+    public UserVO updateProfile(CurrentUser currentUser, UpdateProfileRequest request) {
+        User user = requireUser(currentUser.id());
+        user.setNickname(blankToNull(request.nickname()));
+        user.setEmail(blankToNull(request.email()));
+        user.setPhone(blankToNull(request.phone()));
+        userRepository.save(user);
+        return UserVO.from(user);
+    }
+
+    /**
+     * 我的使用统计。只读事务：三个 count 都是独立查询，不需要写。
+     * 先 requireUser 一次：账号刚被管理员删掉时给 404，而不是返回三个 0 让人以为数据没了。
+     */
+    @Transactional(readOnly = true)
+    public UserProfileStatsVO stats(CurrentUser currentUser) {
+        Long ownerId = requireUser(currentUser.id()).getId();
+        return new UserProfileStatsVO(conversationRepository.countByOwnerId(ownerId),
+                messageRepository.countByOwnerId(ownerId),
+                attachmentRepository.countByOwnerId(ownerId));
+    }
+
+    /**
+     * 「退出所有设备」：把 passwordChangedAt 推到当前时间，本人手里所有 token（**包括正在用的这个**）
+     * 下一个请求就 401。复用改密码那套失效机制，不需要会话表。
+     * <p>
+     * 和管理端的「强制下线」是同一个动作、不同的入口：那边是管理员怀疑 token 泄漏时踢别人，
+     * 这边是本人怀疑自己在别处忘了退出时踢自己。所以它**不改密码、不置 mustChangePassword**——
+     * 本人马上要用原密码重新登回来，被强制改密会莫名其妙。
+     * <p>
+     * 前端调用成功后必须自己 clearSession()：后端不会替它清 localStorage，
+     * 而这个 token 已经废了，不清就是停在一个点什么都 401 的死页面上。
+     */
+    @Transactional
+    public void revokeOwnSessions(CurrentUser currentUser) {
+        User user = requireUser(currentUser.id());
+        user.setPasswordChangedAt(LocalDateTime.now());
+        userRepository.save(user);
     }
 
     /**
@@ -105,6 +175,15 @@ public class UserService {
 
     private LoginResponse issueSession(User user) {
         return LoginResponse.of(tokenService.issue(user), tokenService.ttlSeconds(), UserVO.from(user));
+    }
+
+    /** 全空白（null / "" / "   "）统一存 NULL：库里不该同时存在「没填」和「填了个空」两种状态。 */
+    private static String blankToNull(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String stripped = raw.strip();
+        return stripped.isEmpty() ? null : stripped;
     }
 
     private User requireUser(Long id) {

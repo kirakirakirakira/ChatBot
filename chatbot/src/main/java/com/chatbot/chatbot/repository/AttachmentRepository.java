@@ -59,4 +59,12 @@ public interface AttachmentRepository extends JpaRepository<Attachment, Long> {
     @Query("delete from Attachment a where a.conversation.id in "
             + "(select c.id from Conversation c where c.owner.id = :ownerId)")
     void deleteByOwnerId(@Param("ownerId") Long ownerId);
+
+    /**
+     * 某用户上传过的附件数（「个人信息」页的使用统计）。
+     * 只 count 不取行：这张表带 LONGBLOB，select 出来等于把图片全搬进内存再扔掉。
+     */
+    @Query("select count(a) from Attachment a where a.conversation.id in "
+            + "(select c.id from Conversation c where c.owner.id = :ownerId)")
+    long countByOwnerId(@Param("ownerId") Long ownerId);
 }

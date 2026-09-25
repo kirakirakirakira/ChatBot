@@ -3,6 +3,8 @@ package com.chatbot.chatbot.controller;
 import com.chatbot.chatbot.auth.CurrentUser;
 import com.chatbot.chatbot.auth.RequireAdmin;
 import com.chatbot.chatbot.dto.AdminUserVO;
+import com.chatbot.chatbot.dto.BatchUserRequest;
+import com.chatbot.chatbot.dto.BatchUserResultVO;
 import com.chatbot.chatbot.dto.CreateUserRequest;
 import com.chatbot.chatbot.dto.PageVO;
 import com.chatbot.chatbot.dto.ResetPasswordRequest;
@@ -10,6 +12,7 @@ import com.chatbot.chatbot.dto.ResetPasswordResult;
 import com.chatbot.chatbot.dto.UpdateRoleRequest;
 import com.chatbot.chatbot.dto.UpdateStatusRequest;
 import com.chatbot.chatbot.dto.UserAdminOptionsVO;
+import com.chatbot.chatbot.service.AdminUserBatchService;
 import com.chatbot.chatbot.service.AdminUserService;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -43,9 +46,12 @@ import org.springframework.web.bind.annotation.RestController;
 public class AdminUserController {
 
     private final AdminUserService adminUserService;
+    private final AdminUserBatchService adminUserBatchService;
 
-    public AdminUserController(AdminUserService adminUserService) {
+    public AdminUserController(AdminUserService adminUserService,
+                               AdminUserBatchService adminUserBatchService) {
         this.adminUserService = adminUserService;
+        this.adminUserBatchService = adminUserBatchService;
     }
 
     /**
@@ -77,6 +83,21 @@ public class AdminUserController {
     @ResponseStatus(HttpStatus.CREATED)
     public AdminUserVO create(@Valid @RequestBody CreateUserRequest request, CurrentUser currentUser) {
         return adminUserService.create(currentUser, request);
+    }
+
+    /**
+     * 批量操作：一次一个动作（启用 / 禁用 / 改角色 / 重置密码 / 强制下线 / 删除），作用于一批 id。
+     * <p>
+     * 响应是**逐条结果**而不是一个总数：批量里失败是常态（自己的行、层级不低于自己的行、
+     * 最后一个启用的管理员），逐条提交、逐条报原因，管理员改一下勾选再点一次就行。
+     * 事务与失败语义、以及「为什么不放在 AdminUserService 里」见 {@link AdminUserBatchService} 类注释。
+     * <p>
+     * 路径是 /batch 而不是 /{id} 的兄弟：POST 语义上是「对这批人执行一个动作」，
+     * 挂在集合路径下也就自动继承了类级 @RequireAdmin。
+     */
+    @PostMapping("/batch")
+    public BatchUserResultVO batch(@Valid @RequestBody BatchUserRequest request, CurrentUser currentUser) {
+        return adminUserBatchService.execute(currentUser, request);
     }
 
     @PutMapping("/{id}/role")

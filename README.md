@@ -64,9 +64,25 @@ The frontend uses history-mode routing (`/chat`, `/admin/users`, …). The Vite 
 back to `index.html` for you; **for production, configure your static server the same way**
 (e.g. nginx `try_files $uri /index.html`), or refreshing a deep URL will 404 at the server.
 
-### Default admin
+### Default accounts
 
-`admin` / `admin` - change the password right after the first login.
+`admin` / `admin` - the seed account, a **super admin**; change the password right after the first login.
+
+To exercise the role hierarchy ("who may manage whom"), the backend also seeds one test account
+per role on boot, **only when the username does not exist yet** (it never overwrites an account
+or resets a changed password):
+
+| Username | Role | Password |
+| -------- | ---- | -------- |
+| `test_super` | super admin | `test123456` |
+| `test_admin` | admin | `test123456` |
+| `test_user` | regular user | `test123456` |
+| `test_guest` | guest | `test123456` |
+
+Skip them in production with `AUTH_SEED_TEST_USERS=false` (or `auth.seed-test-users=false`).
+Old databases whose seed account is still a plain admin are upgraded on boot: when the system has
+no enabled super admin at all, `SeedUserInitializer` promotes the seed account back to super admin
+(manual alternative: the UPDATE in `chatbot/sql/init.sql`'s upgrade section).
 
 ## Documentation Map
 
@@ -74,7 +90,7 @@ back to `index.html` for you; **for production, configure your static server the
 | --------- | --- |
 | [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | **架构事实源（改代码前先读它）**：五分钟速览与检索速查、目录树 + 逐文件清单、后端分层与调用链、前端组件与状态、配置与环境变量全表、列级数据库设计、API 全量表与 JSON 形状、五条核心流程、安全设计、开发命令、**改完代码后的文档同步清单**、扩展点、已知限制与 18 条踩坑记录 |
 | [chatbot/README.md](chatbot/README.md) | Backend contract: SSE event shapes, why reasoning is forwarded, cancel semantics, error body, config trade-offs |
-| [chatbot-web/README.md](chatbot-web/README.md) | Frontend conventions: Vite proxy, Node version, auth gate, SSE parsing over fetch, component map |
+| [chatbot-web/README.md](chatbot-web/README.md) | Frontend conventions: Vite proxy (`BACKEND_URL` override), Node version, auth gate, SSE parsing over fetch, component map |
 
 Startup commands live in this file only; contract details live in the module READMEs only.
 Everything else points at them instead of repeating.

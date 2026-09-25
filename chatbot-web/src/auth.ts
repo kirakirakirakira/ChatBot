@@ -45,6 +45,22 @@ export const isAdmin = computed(() => currentUser.value?.role === ROLE_ADMIN || 
 
 export const isSuperAdmin = computed(() => currentUser.value?.role === ROLE_SUPER_ADMIN)
 
+/**
+ * 展示名：昵称优先，没设昵称就回退到登录名。
+ *
+ * 放这里而不是各组件自己写 `user.nickname || user.username`：顶栏头像、左下角账号菜单、
+ * 个人信息页至少要显示三遍，写三遍就一定会有某一处忘了回退（于是界面上出现一个空白名字）。
+ * 头像首字母也从它取，昵称改了头像跟着变。
+ */
+export const displayName = computed(() => {
+  const user = currentUser.value
+  if (user === null) {
+    return ''
+  }
+  const nickname = user.nickname?.trim()
+  return nickname ? nickname : user.username
+})
+
 export function setSession(newToken: string, user: CurrentUser): void {
   token.value = newToken
   currentUser.value = user

@@ -173,6 +173,11 @@ function scrollToBottom(): void {
 
 const router = useRouter()
 
+/** 头像菜单的「个人信息」：跳到平级模块 /profile（资料 / 人设 / 改密码 / 退出所有设备都在那一页）。 */
+function goProfile(): void {
+  void router.push('/profile')
+}
+
 /** 头像菜单的「用户管理」：跳到平级模块 /admin/users。入口本身只对管理员显示，路由守卫还会再拦一道。 */
 function goUserAdmin(): void {
   void router.push('/admin/users')
@@ -749,6 +754,7 @@ onBeforeUnmount(() => {
           v-if="currentUser"
           :user="currentUser"
           :is-admin="isAdmin"
+          @profile="goProfile"
           @users="goUserAdmin"
           @prompt="showPromptDialog = true"
           @password="showPasswordDialog = true"

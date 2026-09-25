@@ -11,6 +11,8 @@ import type {
   LlmOptions,
   LoginResult,
   MessagePage,
+  MyStats,
+  UpdateProfileBody,
 } from '@/types'
 import { clearSession } from '@/auth'
 import { API_BASE, extractErrorMessage, request, withAuth } from '@/api/client'
@@ -52,6 +54,35 @@ export function updateSystemPrompt(systemPrompt: string): Promise<CurrentUser> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ systemPrompt }),
   })
+}
+
+/**
+ * 改自己的资料（昵称 / 邮箱 / 手机号）。返回整份用户信息，调用方用它覆盖本地登录态。
+ * 后端刻意**不换发 token**：改资料不是安全事件，不该把人踢下线（改密码才换发）。
+ */
+export function updateMyProfile(body: UpdateProfileBody): Promise<CurrentUser> {
+  return request<CurrentUser>('/users/me/profile', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+}
+
+/**
+ * 我的使用统计。单独一个接口而不是并进 fetchMe()：消息数要在 LONGTEXT 大表上 count，
+ * 而 /me 每次导航都会被守卫调一次，把它挂上去等于每次切页都多扫一遍消息表。
+ */
+export function fetchMyStats(): Promise<MyStats> {
+  return request<MyStats>('/users/me/stats')
+}
+
+/**
+ * 退出所有设备：作废自己的全部登录态（**包括当前这个**）。204 无响应体。
+ * 调用方拿到结果后必须 clearSession()：后端不会替它清 localStorage，
+ * 而这个 token 已经废了，不清就是停在一个点什么都 401 的死页面上。
+ */
+export function revokeMySessions(): Promise<void> {
+  return request<void>('/users/me/revoke', { method: 'POST' })
 }
 
 export function createConversation(): Promise<Conversation> {

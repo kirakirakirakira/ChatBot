@@ -44,4 +44,10 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
     @Modifying
     @Query("delete from Conversation c where c.owner.id = :ownerId")
     void deleteByOwnerId(@Param("ownerId") Long ownerId);
+
+    /**
+     * 某用户的会话数，给「个人信息」页的使用统计用。
+     * 派生查询就够（owner_id 上有复合索引，count 直接走索引），不需要手写 JPQL。
+     */
+    long countByOwnerId(Long ownerId);
 }

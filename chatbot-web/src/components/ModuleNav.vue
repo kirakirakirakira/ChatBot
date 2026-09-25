@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
 import { useRouter } from 'vue-router'
-import { clearSession, currentUser, isAdmin } from '@/auth'
+import { clearSession, currentUser, displayName, isAdmin } from '@/auth'
 
 /**
  * 左侧模块导航条。
@@ -21,13 +21,25 @@ interface NavItem {
 const router = useRouter()
 
 /**
- * 导航条底部的账号按钮 + 退出登录。
- * 为什么放在外壳而不是各模块里：管理页没有聊天顶栏的头像菜单，若退出登录只存在于
+ * 导航条底部的账号菜单。
+ * 为什么放在外壳而不是各模块里：管理页没有聊天顶栏的头像菜单，若「个人信息 / 退出登录」只存在于
  * ChatView，站在 /admin/users 上的人就得先跳回聊天才能退出——外壳级的事不该跟着模块走。
- * 这里只调 clearSession()：跳回登录页由 App.vue 的全局 watch 统一负责。
+ * 退出登录只调 clearSession()：跳回登录页由 App.vue 的全局 watch 统一负责。
  */
 const menuOpen = ref(false)
 const accountRoot = ref<HTMLElement | null>(null)
+
+const avatarChar = computed(() => (displayName.value || '?').charAt(0).toUpperCase())
+/** 设了昵称才多显示一行登录名：昵称和登录名一样时，重复显示只是噪音。 */
+const showUsername = computed(() => displayName.value !== (currentUser.value?.username ?? ''))
+
+function go(path: string): void {
+  menuOpen.value = false
+  // 已经在这一页就别再 push 一次：vue-router 会当成重复导航，白白产生一次告警
+  if (router.currentRoute.value.path !== path) {
+    void router.push(path)
+  }
+}
 
 function logout(): void {
   menuOpen.value = false
@@ -86,19 +98,37 @@ const items = computed<NavItem[]>(() =>
       <button
         class="avatar-btn"
         type="button"
-        :title="currentUser?.username ?? ''"
-        :aria-label="currentUser?.username ?? ''"
+        :title="displayName"
+        :aria-label="displayName"
+        :aria-expanded="menuOpen"
         @click="menuOpen = !menuOpen"
       >
-        <span class="avatar">{{ (currentUser?.username ?? '?').charAt(0).toUpperCase() }}</span>
+        <span class="avatar">{{ avatarChar }}</span>
       </button>
       <div v-if="menuOpen" class="account-menu" role="menu">
         <div class="account-head">
-          <div class="account-name">{{ currentUser?.username }}</div>
+          <div class="account-name" :title="displayName">{{ displayName }}</div>
+          <div v-if="showUsername" class="account-username">@{{ currentUser?.username }}</div>
           <div class="account-role">{{ currentUser?.roleLabel }}</div>
         </div>
         <div class="account-sep" />
-        <button class="account-item" type="button" role="menuitem" @click="logout">退出登录</button>
+        <button class="account-item" type="button" role="menuitem" @click="go('/profile')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" /><circle cx="12" cy="7" r="4" /></svg>
+          个人信息
+        </button>
+        <button v-if="isAdmin" class="account-item" type="button" role="menuitem" @click="go('/admin/users')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" /><circle cx="9" cy="7" r="4" /><path d="M22 21v-2a4 4 0 0 0-3-3.87" /><path d="M16 3.13a4 4 0 0 1 0 7.75" /></svg>
+          用户管理
+        </button>
+        <button v-if="isAdmin" class="account-item" type="button" role="menuitem" @click="go('/admin/audit')">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z" /><path d="M14 2v6h6" /><path d="M8 13h8" /><path d="M8 17h5" /></svg>
+          操作记录
+        </button>
+        <div class="account-sep" />
+        <button class="account-item danger" type="button" role="menuitem" @click="logout">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /></svg>
+          退出登录
+        </button>
       </div>
     </div>
   </nav>
@@ -178,35 +208,59 @@ const items = computed<NavItem[]>(() =>
 }
 
 .account-menu {
+  /* 导航条只有 56px 宽，菜单比它宽得多。原来是 left:50% + translateX(-50%) 居中弹出，
+     于是菜单的左半截直接跑到视口外面被裁掉（左下角点头像「显示不全」就是这么来的）。
+     改成贴着导航条**右侧**弹出、底边与头像对齐：菜单再宽也只往内容区里长，永远不会出屏。 */
   position: absolute;
-  bottom: calc(100% + 8px);
-  left: 50%;
-  transform: translateX(-50%);
+  left: calc(100% + 10px);
+  bottom: 0;
   z-index: 40;
-  min-width: 150px;
+  min-width: 208px;
   padding: 6px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--radius-m);
   box-shadow: var(--shadow-2);
+  animation: account-menu-in 130ms cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+
+@keyframes account-menu-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
 }
 
 .account-head {
-  padding: 6px 10px 4px;
+  padding: 8px 10px 6px;
 }
 
 .account-name {
   font-size: 13.5px;
   font-weight: 600;
-  max-width: 120px;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-username {
+  font-size: 11.5px;
+  color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .account-role {
-  font-size: 11px;
+  display: inline-block;
+  margin-top: 5px;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
   color: var(--text-muted);
+  font-size: 11px;
 }
 
 .account-sep {
@@ -218,18 +272,33 @@ const items = computed<NavItem[]>(() =>
 .account-item {
   display: flex;
   align-items: center;
+  gap: 9px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 8px 10px;
   border: none;
   border-radius: var(--radius-s);
   background: transparent;
-  color: var(--danger);
+  color: var(--text);
   font-size: 13.5px;
   text-align: left;
   cursor: pointer;
 }
 
+.account-item svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
 .account-item:hover {
+  background: var(--panel-2);
+}
+
+.account-item.danger,
+.account-item.danger svg {
+  color: var(--danger);
+}
+
+.account-item.danger:hover {
   background: color-mix(in srgb, var(--danger) 10%, transparent);
 }
 </style>

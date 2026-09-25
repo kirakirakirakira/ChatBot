@@ -17,6 +17,8 @@ USE chatbot;
 -- password_changed_at 为 NULL 表示从没改过密码；签发时间（token 的 iat）早于它的登录态一律作废。
 --   这列必须保持 datetime(6)：后端按毫秒比较 iat 和它，精度掉到秒会让改密码那一秒签发的旧 token 躲过失效判断。
 -- last_login_at 为 NULL 表示从没登录过；must_change_password=1 表示管理员重置过密码、本人还没改。
+-- nickname / email / phone 是「个人信息」页维护的资料，全部可空（NULL = 没填）：
+--   nickname 只做展示（界面回退显示 username），不参与登录、不进审计快照；email 的格式校验在应用层（@Email）。
 CREATE TABLE IF NOT EXISTS `sys_user` (
   `id`                   bigint       NOT NULL AUTO_INCREMENT,
   `username`             varchar(50)  NOT NULL,
@@ -28,6 +30,9 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `last_login_at`        datetime(6)  DEFAULT NULL,
   `must_change_password` tinyint(1)   NOT NULL DEFAULT 0,
   `system_prompt`        text         DEFAULT NULL,
+  `nickname`             varchar(50)  DEFAULT NULL,
+  `email`                varchar(100) DEFAULT NULL,
+  `phone`                varchar(30)  DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_sys_user_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -118,6 +123,18 @@ CREATE TABLE IF NOT EXISTS `admin_audit_log` (
 INSERT IGNORE INTO `sys_user` (`username`, `password`, `role`, `created_at`)
 VALUES ('admin', '$2a$10$lN0TQaxdLsYVpQ9wDx5OB.cucn20byv6DYaSmL32FvvtzDZWlEpmi', 2, NOW(6));
 
+-- 测试账号：每个角色一个，密码统一是 test123456（下面是它的 BCrypt 哈希，cost=10）。
+-- 存在的理由是**层级权限没法用单账号验证**：超管能管管理员、管理员管不了管理员、访客谁都不该管得动，
+-- 这三条只有四个不同角色的账号同时在库里才点得出来。
+-- 与后端 SeedUserInitializer 是同一份清单的二选一兜底（跑脚本 or 直接启动都会得到同样的账号）：
+--   都只在「用户名不存在」时插入，不覆盖已有账号、不重置改过的密码。
+-- **生产环境别执行这一段**，或启动时用 AUTH_SEED_TEST_USERS=false 关掉后端的自动补齐。
+INSERT IGNORE INTO `sys_user` (`username`, `password`, `role`, `status`, `created_at`)
+VALUES ('test_super', '$2a$10$5GosfNYckx.pqmr6U/JHauxCRq/mTJ51kO7EgXBA7Zhe.4CcBe6yq', 2, 0, NOW(6)),
+       ('test_admin', '$2a$10$5GosfNYckx.pqmr6U/JHauxCRq/mTJ51kO7EgXBA7Zhe.4CcBe6yq', 1, 0, NOW(6)),
+       ('test_user',  '$2a$10$5GosfNYckx.pqmr6U/JHauxCRq/mTJ51kO7EgXBA7Zhe.4CcBe6yq', 0, 0, NOW(6)),
+       ('test_guest', '$2a$10$5GosfNYckx.pqmr6U/JHauxCRq/mTJ51kO7EgXBA7Zhe.4CcBe6yq', 3, 0, NOW(6));
+
 -- ===== 已有库升级：2026-09-24「会话按用户隔离」 =====
 -- 全新库不用看这段，上面的 CREATE TABLE 已经是新结构。
 -- 旧库必须手工执行下面两步，而且**要在启动新版后端之前做完**：
@@ -171,5 +188,19 @@ VALUES ('admin', '$2a$10$lN0TQaxdLsYVpQ9wDx5OB.cucn20byv6DYaSmL32FvvtzDZWlEpmi',
 -- 1) message.role 的取值集合由 Role 枚举决定（Hibernate 按字母序生成）。以后给 Role 加新值（例如 SYSTEM）时，
 --    已存在的库不会自动变更列类型，需要手工执行：
 --    ALTER TABLE `message` MODIFY `role` enum('ASSISTANT','SYSTEM','USER') NOT NULL;
--- 2) 删除用户目前不是功能，所以 fk_conversation_owner 用的是默认的 RESTRICT：
---    真要加「删号」功能，得先决定他名下的会话是级联删还是转交，别直接指望数据库报错拦住你。
+-- 2) 删号已经是功能（DELETE /api/admin/users/{id}，级联删会话 / 消息 / 附件），但外键**仍然是 RESTRICT**：
+--    级联是应用层按「附件 → 消息 → 会话 → 用户」的顺序显式删的（见 AdminUserService.delete），
+--    不是数据库 ON DELETE CASCADE。别把这里的 RESTRICT 当成「还没做删号」的遗留，也别顺手改成 CASCADE：
+--    顺序写在代码里才能在删之前抓一份用户名快照进审计表（用户行一没，就再也认不出删的是谁了）。
+--
+-- ===== 已有库升级：2026-09-25「个人资料（昵称 / 邮箱 / 手机号）」 =====
+-- 三个可空列，老账号保持 NULL（= 没填，界面回退显示 username），不需要清数据：
+--   ALTER TABLE `sys_user`
+--     ADD COLUMN `nickname` varchar(50)  DEFAULT NULL AFTER `system_prompt`,
+--     ADD COLUMN `email`    varchar(100) DEFAULT NULL AFTER `nickname`,
+--     ADD COLUMN `phone`    varchar(30)  DEFAULT NULL AFTER `email`;
+-- （ddl-auto=update 也会自动补这三列，手工执行只是为了让库里少一次启动期的 DDL。）
+--
+-- ===== 已有库升级：2026-09-25「测试账号 + 种子账号自愈」 =====
+-- 不想跑上面那段 INSERT 的话，直接启动后端即可：SeedUserInitializer 会补齐缺失的测试账号，
+-- 并在「系统里一个启用的超级管理员都没有」时把种子账号（auth.default-admin-username，默认 admin）提回超级管理员。
