@@ -30,6 +30,9 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
 - **管理端全在 `/api/admin/**`，类级 `@RequireAdmin`**：列表（分页+筛选）/ 字典 / 建号 / 改角色 / 启停 /
   重置密码 / 强制下线 / 删号。自我保护规则（不能对自己下手、不能动掉最后一个启用的管理员）一律 400 中文文案；
   删号级联删 附件→消息→会话→用户，单事务、**不做软删除**（留用户行就得造一个幽灵替身账号）。细节见 PROJECT_OVERVIEW.md 8.6。
+- **管理端操作有审计**：六个写操作（建号 / 改角色 / 启停 / 重置密码 / 强制下线 / 删号）成功后各写一行 `admin_audit_log`，
+  与业务**同事务**（操作回滚则不留痕）；读取走 `GET /api/admin/audit`（同样类级 `@RequireAdmin`）。
+  审计表不建外键（管理员自己也可能被删）、应用层不开删除入口——能删的审计不叫审计。
 - **带图请求打到不支持图片的模型会 400**（`llm.vision-models` 白名单），错误文案里列出可用模型。
   校验顺序是刻意的：附件合法性与模型白名单都在用户消息落库**之前**；只有「历史窗口里有旧图、用户刚换了非视觉模型」
   这一种情况会在落库后报 400——那种情况下用户消息还在，换回视觉模型点重新生成即可恢复。
@@ -109,6 +112,7 @@ curl.exe -s -X POST http://localhost:8089/api/admin/users -H $h -H "Content-Type
 curl.exe -s -X PUT http://localhost:8089/api/admin/users/2/status -H $h -H "Content-Type: application/json" -d '{"status":1}'
 curl.exe -s -X POST http://localhost:8089/api/admin/users/2/password -H $h -H "Content-Type: application/json" -d '{"generate":true}'
 curl.exe -s -i -X DELETE http://localhost:8089/api/admin/users/2 -H $h             # 删号：204
+curl.exe -s "http://localhost:8089/api/admin/audit?page=0&size=20" -H $h            # 操作审计：id 倒序
 curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":""}'
 ```
 

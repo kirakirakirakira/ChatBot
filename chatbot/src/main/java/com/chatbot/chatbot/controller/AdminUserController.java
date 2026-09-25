@@ -74,8 +74,8 @@ public class AdminUserController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public AdminUserVO create(@Valid @RequestBody CreateUserRequest request) {
-        return adminUserService.create(request);
+    public AdminUserVO create(@Valid @RequestBody CreateUserRequest request, CurrentUser currentUser) {
+        return adminUserService.create(currentUser, request);
     }
 
     @PutMapping("/{id}/role")

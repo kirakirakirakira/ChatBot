@@ -117,7 +117,7 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
     src/
       api/client.ts 传输层：fetch 封装、鉴权头、401 兜底（全站唯一一份）
       api.ts        聊天与登录的接口清单、SSE 读流、消息分页参数
-      api/userAdmin.ts  用户管理模块接口（/api/admin/users 八个）；新模块照这个开新文件
+      api/userAdmin.ts  用户管理模块接口（/api/admin/users 八个 + /api/admin/audit）；新模块照这个开新文件
       auth.ts       登录态：token / currentUser / isAdmin
       types.ts      类型定义，与后端 DTO / VO 一一对应（含管理端 AdminUser / Page / UserAdminOptions）
       session.ts    ensureSession()：本地 token 的一次性有效性确认（守卫里 await）
@@ -130,6 +130,7 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
         LoginView.vue   登录页（顶层路由，不在外壳里）
         ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 / 模型 / 思考强度 + 停止生成
         admin/UsersView.vue  用户管理（/admin/users）：表格 + 筛选 + 分页 + 各操作弹窗
+        admin/AuditView.vue  操作记录（/admin/audit）：只读审计列表，无清空按钮
         ForbiddenView.vue  /403：已登录但权限不够
         NotFoundView.vue   其余一切路径的兜底
       components/
@@ -165,3 +166,5 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
 - `UserVO.mustChangePassword=true` 时外壳弹**关不掉的改密框**（管理员重置过密码），改完才能用任何模块。
 - 退出登录在导航条底部的账号按钮里：管理页没有聊天顶栏的头像菜单，退出是外壳级的事。
 - 管理台视图懒加载：构建产物里是独立分包，普通用户的 bundle 不含管理台代码。
+- 操作审计是全管理端共用的表：新模块的写操作在自己的事务里调后端 `AdminAuditService.record()`，
+  界面统一在 `/admin/audit` 看（hidden 路由，从用户管理页的「操作记录」链接进入）。

@@ -206,7 +206,10 @@ function formatTime(iso: string | null): string {
         <h1 class="admin-title">用户管理</h1>
         <p class="admin-sub">共 {{ total }} 个账号</p>
       </div>
-      <button class="btn-ghost btn-primary" type="button" @click="showCreate = true">新建用户</button>
+      <div class="head-actions">
+        <RouterLink class="btn-ghost head-link" to="/admin/audit">操作记录</RouterLink>
+        <button class="btn-ghost btn-primary" type="button" @click="showCreate = true">新建用户</button>
+      </div>
     </header>
 
     <div class="admin-toolbar">
@@ -315,6 +318,16 @@ function formatTime(iso: string | null): string {
   gap: 16px;
   max-width: 1080px;
   margin: 0 auto 18px;
+}
+
+.head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.head-link {
+  text-decoration: none;
 }
 
 .admin-title {

@@ -67,6 +67,13 @@ export const routes: RouteRecordRaw[] = [
         meta: { moduleId: 'admin-users', title: '用户管理', icon: markRaw(IconUsers), order: 90, requiresAdmin: true },
       },
       {
+        // 审计是用户管理模块的子页面，不是平级模块：hidden 不进导航条，从 UsersView 的链接进入
+        path: 'admin/audit',
+        name: 'admin-audit',
+        component: () => import('@/views/admin/AuditView.vue'),
+        meta: { title: '操作记录', requiresAdmin: true, hidden: true },
+      },
+      {
         path: FORBIDDEN_PATH.slice(1),
         name: 'forbidden',
         component: ForbiddenView,

@@ -11,6 +11,7 @@ import com.chatbot.chatbot.dto.ResetPasswordResult;
 import com.chatbot.chatbot.dto.UpdateRoleRequest;
 import com.chatbot.chatbot.dto.UpdateStatusRequest;
 import com.chatbot.chatbot.dto.UserAdminOptionsVO;
+import com.chatbot.chatbot.entity.AuditAction;
 import com.chatbot.chatbot.entity.User;
 import com.chatbot.chatbot.repository.AttachmentRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
@@ -75,17 +76,20 @@ public class AdminUserService {
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
     private final PasswordEncoder passwordEncoder;
+    private final AdminAuditService adminAuditService;
 
     public AdminUserService(UserRepository userRepository,
                             ConversationRepository conversationRepository,
                             MessageRepository messageRepository,
                             AttachmentRepository attachmentRepository,
-                            PasswordEncoder passwordEncoder) {
+                            PasswordEncoder passwordEncoder,
+                            AdminAuditService adminAuditService) {
         this.userRepository = userRepository;
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
         this.passwordEncoder = passwordEncoder;
+        this.adminAuditService = adminAuditService;
     }
 
     /**
@@ -110,7 +114,7 @@ public class AdminUserService {
      * 由唯一索引兜底，翻译成 400 的处理器见 GlobalExceptionHandler。
      */
     @Transactional
-    public AdminUserVO create(CreateUserRequest request) {
+    public AdminUserVO create(CurrentUser actor, CreateUserRequest request) {
         String username = request.username().trim();
         int role = (request.role() == null) ? Roles.USER : request.role();
         int status = (request.status() == null) ? UserStatus.ENABLED : request.status();
@@ -127,7 +131,11 @@ public class AdminUserService {
         // 管理员建号时密码是管理员定的，但不强制本人改：要不要改由管理员口头约定，
         // 「强制改密」这个标记的语义留给「重置密码」那条路（见 resetPassword）
         user.setMustChangePassword(Boolean.FALSE);
-        return AdminUserVO.from(userRepository.save(user));
+        User saved = userRepository.save(user);
+        // 审计与业务同事务：建号失败回滚时这条留痕一起回滚，不留假记录
+        adminAuditService.record(actor, AuditAction.CREATE_USER, saved.getId(), saved.getUsername(),
+                "role=" + role + ", status=" + status);
+        return AdminUserVO.from(saved);
     }
 
     /** 改角色。可以升级也可以降级，唯一不许的是「把自己从管理员降下去」和「降掉最后一个启用的管理员」。 */
@@ -135,6 +143,7 @@ public class AdminUserService {
     public AdminUserVO updateRole(CurrentUser actor, Long id, UpdateRoleRequest request) {
         requireKnownRole(request.role());
         User user = requireUser(id);
+        int oldRole = user.getRole();
         boolean demotingAdmin = Roles.isAdmin(user.getRole()) && !Roles.isAdmin(request.role());
         if (isSelf(actor, id) && demotingAdmin) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能取消自己的管理员角色");
@@ -144,7 +153,10 @@ public class AdminUserService {
             requireAnotherEnabledAdmin();
         }
         user.setRole(request.role());
-        return AdminUserVO.from(userRepository.save(user));
+        AdminUserVO updated = AdminUserVO.from(userRepository.save(user));
+        adminAuditService.record(actor, AuditAction.UPDATE_ROLE, user.getId(), user.getUsername(),
+                "role " + oldRole + " → " + request.role());
+        return updated;
     }
 
     /**
@@ -155,6 +167,7 @@ public class AdminUserService {
     public AdminUserVO updateStatus(CurrentUser actor, Long id, UpdateStatusRequest request) {
         requireKnownStatus(request.status());
         User user = requireUser(id);
+        int oldStatus = user.getStatus();
         if (isSelf(actor, id)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能修改自己的账号状态");
         }
@@ -164,7 +177,10 @@ public class AdminUserService {
             requireAnotherEnabledAdmin();
         }
         user.setStatus(request.status());
-        return AdminUserVO.from(userRepository.save(user));
+        AdminUserVO updated = AdminUserVO.from(userRepository.save(user));
+        adminAuditService.record(actor, AuditAction.UPDATE_STATUS, user.getId(), user.getUsername(),
+                "status " + oldStatus + " → " + request.status());
+        return updated;
     }
 
     /**
@@ -186,7 +202,9 @@ public class AdminUserService {
         user.setPasswordChangedAt(LocalDateTime.now());
         user.setMustChangePassword(Boolean.TRUE);
         userRepository.save(user);
-        // 明文不进日志：日志会被收集和转发，密码不该出现在里面（安全红线）
+        // 明文不进日志、也不进审计：日志会被收集和转发，密码不该出现在里面（安全红线）
+        adminAuditService.record(actor, AuditAction.RESET_PASSWORD, user.getId(), user.getUsername(),
+                generate ? "生成随机密码，强制下次改密" : "指定新密码，强制下次改密");
         return new ResetPasswordResult(generate ? plainPassword : null, Boolean.TRUE);
     }
 
@@ -203,6 +221,8 @@ public class AdminUserService {
         }
         user.setPasswordChangedAt(LocalDateTime.now());
         userRepository.save(user);
+        adminAuditService.record(actor, AuditAction.REVOKE_SESSIONS, user.getId(), user.getUsername(),
+                "作废全部登录态（不改密码）");
     }
 
     /**
@@ -224,10 +244,14 @@ public class AdminUserService {
         // 删除顺序不能换：fk_attachment_conversation / fk_message_conversation / fk_conversation_owner
         // 都是 RESTRICT，先删父行会直接撞 errno 1451。和 ConversationService.delete 是同一套顺序，
         // 只是这里按 owner 一次删完，不用逐个会话循环。
+        String targetName = user.getUsername();
         attachmentRepository.deleteByOwnerId(id);
         messageRepository.deleteByOwnerId(id);
         conversationRepository.deleteByOwnerId(id);
         userRepository.delete(user);
+        // 目标行已经没了，靠删前抓的名字快照认人（审计表不建外键，见 AdminAuditLog 类注释）
+        adminAuditService.record(actor, AuditAction.DELETE_USER, id, targetName,
+                "级联删除其名下的会话 / 消息 / 附件");
     }
 
     private Pageable pageable(Integer page, Integer size) {

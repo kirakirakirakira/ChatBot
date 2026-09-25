@@ -92,6 +92,25 @@ CREATE TABLE IF NOT EXISTS `attachment` (
   CONSTRAINT `fk_attachment_conversation` FOREIGN KEY (`conversation_id`) REFERENCES `conversation` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 管理端操作审计，对应实体 com.chatbot.chatbot.entity.AdminAuditLog。
+-- 只记成功的写操作，且与业务操作同事务：业务回滚则审计一起回滚，不留「失败但有痕」的假记录。
+-- actor_id / target_id 刻意不做外键：删号是功能，管理员自己也可能被删，留痕不该反过来挡住删人；
+--   目标被删之后靠 actor_name / target_name 的快照认人。
+-- action 存字符串而非 ENUM：加动作零迁移（取值与中文名见 entity/AuditAction）。
+-- 新表用 IF NOT EXISTS，全新库与旧库都靠这一段，不需要 ALTER。
+CREATE TABLE IF NOT EXISTS `admin_audit_log` (
+  `id`          bigint       NOT NULL AUTO_INCREMENT,
+  `actor_id`    bigint       NOT NULL,
+  `actor_name`  varchar(50)  NOT NULL,
+  `action`      varchar(32)  NOT NULL,
+  `target_id`   bigint       NOT NULL,
+  `target_name` varchar(50)  NOT NULL,
+  `detail`      varchar(255) DEFAULT NULL,
+  `created_at`  datetime(6)  NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_audit_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 初始管理员：admin / admin（下面是字符串 admin 的 BCrypt 哈希，cost=10）。
 -- INSERT IGNORE + username 唯一索引保证脚本可重复执行，也不会把改过的密码覆盖回 admin。登录后请立刻换掉这个默认密码。
 INSERT IGNORE INTO `sys_user` (`username`, `password`, `role`, `created_at`)

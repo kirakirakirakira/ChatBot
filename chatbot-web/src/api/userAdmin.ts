@@ -4,7 +4,7 @@
  * 刻意不放进 api.ts：api.ts 是「聊天与登录」的接口清单，平级功能模块各开一个文件，
  * 互不干扰、也不会两个人同时改一个文件。传输层（鉴权头 / 401 兜底）仍然只有 api/client.ts 一份。
  */
-import type { AdminUser, Page, ResetPasswordResult, UserAdminOptions } from '@/types'
+import type { AdminAuditLog, AdminUser, Page, ResetPasswordResult, UserAdminOptions } from '@/types'
 import { request } from '@/api/client'
 
 /** 列表查询条件。keyword 空串等同于不传。 */
@@ -94,4 +94,16 @@ export function revokeAdminUserSessions(id: number): Promise<void> {
 /** 删号：级联删会话 / 消息 / 附件，不可恢复。204 无响应体。 */
 export function deleteAdminUser(id: number): Promise<void> {
   return request<void>('/admin/users/' + id, { method: 'DELETE' })
+}
+
+/**
+ * 管理端操作审计（GET /api/admin/audit，id 倒序）。
+ * 端点是全管理端共用的（不挂在 /admin/users 下），以后的管理模块往同一张表写动作；
+ * 暂时放在这个文件里，是因为目前唯一的使用方是用户管理界面。
+ */
+export function listAdminAudit(query: { page?: number; size?: number } = {}): Promise<Page<AdminAuditLog>> {
+  const params = new URLSearchParams()
+  params.set('page', String(query.page ?? 0))
+  params.set('size', String(query.size ?? 20))
+  return request<Page<AdminAuditLog>>('/admin/audit?' + params.toString())
 }

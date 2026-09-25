@@ -109,12 +109,12 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 │       │   ├── ChatbotApplication.java
 │       │   ├── auth/           # 8 个文件：token 签发校验 + 拦截器 + 当前用户注入 + 角色 + 账号状态
 │       │   ├── config/         # 6 个文件：Web/CORS、BCrypt、LLM Bean、种子管理员、全局异常
-│       │   ├── controller/     # 7 个文件：Auth / Conversation / Chat / User / Llm / Attachment / AdminUser
-│       │   ├── dto/            # 23 个文件：请求体、响应 VO、SSE 事件、统一错误体、管理端 PageVO/AdminUserVO 等
-│       │   ├── entity/         # 5 个文件：User / Conversation / Message / Attachment / Role
+│       │   ├── controller/     # 8 个文件：Auth / Conversation / Chat / User / Llm / Attachment / AdminUser / AdminAudit
+│       │   ├── dto/            # 24 个文件：请求体、响应 VO、SSE 事件、统一错误体、管理端 PageVO/AdminUserVO/AdminAuditLogVO 等
+│       │   ├── entity/         # 7 个文件：User / Conversation / Message / Attachment / Role / AdminAuditLog / AuditAction
 │       │   ├── llm/            # 8 个文件：客户端抽象 + OpenAI 兼容实现 + Mock + 配置 + 调用选项 + 多模态 content 段
-│       │   ├── repository/     # 5 个文件：Spring Data JPA 接口 + UserSpecifications（Criteria 查询条件）
-│       │   └── service/        # 5 个文件：ChatService / ConversationService / UserService / AttachmentService / AdminUserService
+│       │   ├── repository/     # 6 个文件：Spring Data JPA 接口 + UserSpecifications（Criteria 查询条件）
+│       │   └── service/        # 6 个文件：Chat / Conversation / User / Attachment / AdminUser / AdminAudit 六个 Service
 │       ├── main/resources/
 │       │   ├── application.properties          # 主配置（提交进仓库）
 │       │   └── application-local.properties    # 本地真实密钥（gitignore）
@@ -200,7 +200,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `AttachmentVO.java` | `(id, mime, fileName, size)`：附件元信息，**不含字节**。上传接口的响应、`MessageVO.attachments` 的元素都是它；字节另走 `GET /api/attachments/{id}` |
 | `ChatEvent.java` | SSE 事件体 `(type, content, messageId, model, promptTokens, completionTokens, reasoningTokens)` + `@JsonInclude(NON_NULL)`。静态工厂：`reasoning(content)` / `delta(content)` / `done(saved)`（把入库消息的模型与用量一起带上）/ `error(content)`。**错误文案在 `content`，不是 `message` 字段。** |
 | `UserVO.java` | `(id, username, role, roleLabel, systemPrompt, createdAt, mustChangePassword)`。**没有 password 字段**：BCrypt 哈希也不能出网。`roleLabel` / `statusLabel` 由后端 `Roles.label()` / `UserStatus.label()` 给出，前端不维护映射。`mustChangePassword` 是给「刚认证的这个会话」的指令（登录与 `/me` 都带）。 |
-| `AdminUserVO.java` 等 8 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword`，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult`。 |
+| `AdminUserVO.java` 等 9 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword`，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult` / `AdminAuditLogVO`（审计行，`actionLabel` 中文由 `AuditAction.label()` 给）。 |
 | `ConversationVO.java` | `(id, title, createdAt, updatedAt)` |
 | `MessageVO.java` | `(id, role小写字符串, content, reasoning, model, promptTokens, completionTokens, reasoningTokens, attachments, createdAt)`。`attachments` 是 `List<AttachmentVO>`，**没图时传 null 而不是空数组**（NON_NULL 会把整个字段省掉）。record 上 `@JsonInclude(NON_NULL)`：没有的字段干脆不下发 |
 | `RenameConversationRequest.java` | `(title)`，`@NotBlank` + `@Size(max=100)`（100 是 `conversation.title` 列宽） |
@@ -219,6 +219,8 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `Conversation.java` | `conversation` | `id`、`owner`（`@ManyToOne` LAZY 非空，`@JoinColumn(name="owner_id")`，外键名 `fk_conversation_owner`）、`title`(非空,100)、`createdAt`、`updatedAt`。表上 `@Index idx_conversation_owner_updated(owner_id, updated_at)` 服务「按用户查列表 + updated_at 倒序」这一条查询。取单个会话只走 `ConversationRepository.findByIdAndOwnerId`，**直接用 findById 就是越权** |
 | `Message.java` | `message` | `id`、`conversation`(`@ManyToOne` LAZY, 非空)、`role`(`@Enumerated(STRING)`, 长度16)、`content`(LONGTEXT)、`reasoning`(可空 LONGTEXT，思考全文)、`model`(varchar 64，回答用的模型)、`promptTokens` / `completionTokens` / `reasoningTokens`(可空 int，用量；拿不到就 NULL，不填 0 冒充真实值)、`createdAt` |
 | `Attachment.java` | `attachment` | 图片附件：`id`、`conversation`(`@ManyToOne` LAZY 非空，外键 `fk_attachment_conversation`，**RESTRICT**)、`messageId`(可空 Long，**刻意不做 `@ManyToOne`**：附件先于消息存在；NULL = 传了还没发出去的孤儿)、`mime`(白名单 5 种)、`fileName`、`sizeBytes`(列名带 `_bytes`：JPQL 里 `size` 是保留函数名)、`data`(`LONGBLOB`)、`createdAt`。一个附件只属于一条消息，不变式由 `AttachmentRepository.linkToMessage` 的 `message_id IS NULL` 条件保证 |
+| `AdminAuditLog.java` | `admin_audit_log` | 管理端操作审计：`actor_id/actor_name`、`action`（字符串，取值见 `AuditAction`）、`target_id/target_name`、`detail`、`created_at`。**actor/target 都不建外键**（删号是功能，留痕不该挡住删人），靠名字快照认人；只记成功的写操作且与业务同事务。 |
+| `AuditAction.java` | — | 审计动作名常量（CREATE_USER / UPDATE_ROLE / UPDATE_STATUS / RESET_PASSWORD / REVOKE_SESSIONS / DELETE_USER）+ `label()` 中文名。**存 varchar 不用 ENUM**：加动作零迁移，不用 ALTER 枚举列；不认识的老动作名 `label()` 原样返回。 |
 | `Role.java` | — | 枚举 `USER`、`ASSISTANT`。**加新值（如 SYSTEM）时已存在的库不会自动变更列类型**，需手工 `ALTER TABLE message MODIFY role enum(...)`（`init.sql` 末尾有备注）。 |
 
 **llm/ — 模型调用抽象与实现**
@@ -238,6 +240,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 
 | 文件 | 方法 |
 |---|---|
+| `AdminAuditLogRepository.java` | 只有 `JpaRepository`，**没有 update / delete 方法是有意的**：审计表一旦能改就失去留痕意义，清历史走运维 SQL 不留应用入口。 |
 | `UserRepository.java` | `Optional<User> findByUsername(String)`（登录用，username 有唯一索引）、`countByRoleAndStatus(Integer, Integer)`（「最后一个启用的管理员」一道闸）、继承 `JpaSpecificationExecutor<User>` 供管理端筛选分页。`findAllByOrderByIdAsc()` 已随 `GET /api/users` 删除。 |
 | `ConversationRepository.java` | `List<Conversation> findAllByOwnerIdOrderByUpdatedAtDesc(Long)`（会话列表，走复合索引）、`Optional<Conversation> findByIdAndOwnerId(Long, Long)`（**唯一的单会话查询入口**，带归属条件）、`int updateTitle(id, ownerId, title)`（**`@Modifying` JPQL 只改 title**：save() 会触发 `@PreUpdate` 刷新 updated_at 把会话顶到列表最前面，而改名不是「活动」；where 带 owner_id，越权改名影响行数为 0） 、`deleteByOwnerId(Long)`（删号级联，`@Modifying` 批量删） |
 | `MessageRepository.java` | `findByConversationIdOrderByIdAsc(Long)`（只留给「不限条数」场景）、`findByConversationId(Long, Pageable)` 与 `findByConversationIdAndIdLessThan(Long, Long, Pageable)`（**id 游标分页**，排序刻意放 Pageable 里而不是方法名上）、`void deleteByConversationId(Long)`。**删除用 `@Modifying` + JPQL 而非派生 `deleteBy`**：派生删除会先 select 再逐条 delete，长会话删一次就是 2N 条 SQL。**调用方需自带事务**（见 `ConversationService.delete` 的 `@Transactional`） 、`deleteByOwnerId(Long)`（删号级联） |
@@ -251,7 +254,9 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `ConversationService.java` | 会话 CRUD，**每个公开方法都接 `CurrentUser`**：`create(user)`、`list(user)`、`messages(id, user, before, limit)`（游标分页）、`delete(id, user)`、`requireOwned(id, user)`（404 口径）、`rename(id, user, request)`、`locateRegenerateTarget(id)`（只定位不删除，返回 `DroppedReply(prompt, model, assistantMessageId)`；最后一条不是助手消息就 400）+ `deleteAssistantMessage(id)`（校验都过了再删：模型不支持图片时必须 400 在删除之前，否则用户连旧回答都丢了） |
 | `AttachmentService.java` | 图片附件的上传 / 校验 / 挂载 / 读取。`ALLOWED_MIME` 5 种位图（**刻意不含 SVG**：能带脚本）、`MAX_BYTES = 5MB`、`MAX_PER_MESSAGE = 4`。`upload()` 先传后发（上传不等发送）；`validateForConversation()` 一次挡掉「不存在 / 是别人的 / 已被占用」三种情况（都 400）；`requireOwned()` 读字节前查归属（404）。**只依赖 `ConversationService`，不被它反向依赖**，否则构造器循环 |
 | `UserService.java` | `login()`（`@Transactional`：`touchLastLogin()` 是 `@Modifying`；先验密码再判禁用 → 403）、`me()`、`changePassword()`、`updateSystemPrompt()`（目标 id 只来自 token；全空白存 NULL）。构造时预算 `dummyHash` 防时序攻击。原来的 `list()` 已删。 |
+| `AdminAuditService.java` | 审计的写与读：`record(actor, action, targetId, targetName, detail)` 供各管理 Service 在**自己的事务里**调用；`page(page, size)` 给 `/api/admin/audit`（id 倒序）。独立成服务是因为审计表全管理端共用，不绑死用户管理一个模块。 |
 | `AdminUserService.java` | 管理端增删改查，**业务规则与自我保护全在这里**（控制器薄）：筛选分页（`UserSpecifications`）、建号查重、改角色/启停/重置密码/强制下线/删号级联；「不能对自己下手」「最后一个启用的管理员动不得」一律 400。 |
+| `AdminAuditController.java` | `GET /api/admin/audit`（类级 `@RequireAdmin`）。挂在 `/api/admin/audit` 而不是 `/api/admin/users/audit`：审计表是全管理端共用的，读取入口不绑死单个模块。 |
 | `AdminUserController.java` | `/api/admin/users` 八个接口，**类级 `@RequireAdmin`**（这个控制器下不存在普通用户该能调的方法，漏打一个就是越权洞）。 |
 | `UserSpecifications.java` | 用户列表的 Criteria 条件：关键字 / 角色 / 状态「传了才拼」；LIKE 转义 `% _ \\`（用户输入不当通配符）；`Locale.ROOT` 小写（避免土耳其语 I 问题）。 |
 
@@ -372,6 +377,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `views/NotFoundView.vue` | 小 | `/:pathMatch(.*)*` 兜底，同样挂在外壳里：登录状态下打错地址还能点导航回去，不用手改 URL。 |
 | `auth.ts` | 小 | 登录态。导出 `ROLE_USER=0`/`ROLE_ADMIN=1`（与后端 `Roles` 对齐）、`token`/`currentUser`（模块级 `ref`，初值读 `localStorage` 的 `chatbot.token`/`chatbot.user`）、`isAuthenticated`/`isAdmin`（`computed`）、`setSession(token,user)`、`clearSession()`。`readStoredUser()` 对 JSON 解析失败返回 null（存坏了就当没登录）。**本文件不要 import api.ts**，否则和 `api.ts → auth.ts` 形成循环依赖。 |
 | `api/client.ts` | 小 | **全站唯一的 HTTP 传输层**（2026-09-25 从 `api.ts` 抽出）。导出 `API_BASE='/api'`、`request<T>(path, init)`、`withAuth(headers?)`、`extractErrorMessage(response)`。`request()` 的口径：挂 `Authorization: Bearer`、非 2xx 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（界面随即弹回登录页）、204 返回 `undefined`。抽出来的理由：项目要长出一批和聊天**平级的功能模块**，每个模块一个 api 文件互不干扰，但「挂鉴权头 + 401 清登录态」只能有一份实现，否则某个模块自己写 fetch 忘了处理 401，界面就会停在一张点什么都 401 的死页面上。**依赖方向刻意单向 `client.ts → auth.ts`**：本文件不 import router——反向 import 会形成 `router → guards → api → client → router` 的环，ESM 下表现为某个绑定初始化时还是 `undefined`，很难查。「掉登录态就回登录页」的兜底放在 `App.vue`，因为那条路径不止 401 一个入口（还有主动退出登录），兜底要兜在一个口子上。 |
+| `api/userAdmin.ts` | 小 | 用户管理模块的后端调用：`listAdminUsers` / `fetchUserAdminOptions` / `createAdminUser` / `updateUserRole` / `updateUserStatus` / `resetAdminUserPassword` / `revokeAdminUserSessions` / `deleteAdminUser` / `listAdminAudit`。传输层仍只用 `api/client.ts` 的 `request()`。 |
 | `api.ts` | 中 | **聊天与登录的接口清单**：只描述「有哪些接口、请求体和响应长什么样」，传输层在 `api/client.ts`。新增别的平级模块另开 `src/api/<模块>.ts`（见 `api/userAdmin.ts`）。导出：`login`、`fetchMe`、`changePassword`、`createConversation`、`listConversations`、`getMessages`、`deleteConversation`、`renameConversation`、`updateSystemPrompt`、`fetchLlmOptions`、`uploadAttachment`、`fetchAttachmentUrl`、`streamChat` / `streamRegenerate`（共用 `consumeSse()`）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
 | `types.ts` | 小 | 与后端一一对应：`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`、`CurrentUser`↔`UserVO`（含 `mustChangePassword?`）、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`、`Attachment`↔`AttachmentVO`；管理端 `AdminUser`↔`AdminUserVO`、`Page<T>`↔`PageVO`、`UserAdminOptions`、`ResetPasswordResult`；另有纯前端的 `UiMessage` / `AttachmentRef`。 |
 | `assets/main.css` | 中 | 全局设计变量（暖中性纸感浅色 / 深墨暗色，跟随系统 `prefers-color-scheme`）+ 半径 / 阴影 / 细滚动条 / 选区 / 焦点环 + **登录与四个弹窗共用的基础件**（`.field*` / `.btn-*` / `.alert-*` / `.modal-*`，放全局是因为长得一样、只写一份） |
@@ -387,6 +393,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `components/common/ConfirmDialog.vue` | 小 | 通用二次确认：`title/text/confirmLabel/danger/busy` + `requireText`（输入一致才点亮确认，删号用它挡手滑）。危险操作不再用 `window.confirm` 系统框。 |
 | `components/admin/UserFormDialog.vue` | 小 | 新建用户：用户名 / 初始密码（可一键生成，`crypto.getRandomValues` + 去易混字符）/ 角色 / 状态；选项来自 `/options` 字典。 |
 | `components/admin/ResetPasswordDialog.vue` | 小 | 重置密码：生成随机 / 手输两种模式；生成模式下明文**只展示这一次**（readonly + 复制按钮 + 醒目提示），关掉就再也看不到。 |
+| `views/admin/AuditView.vue` | 小 | 操作记录页（`/admin/audit`，`meta.hidden` 不进导航条，从 UsersView 的「操作记录」链接进入）：时间 / 操作者 / 动作 / 目标 / 明细 + 分页。**只读且没有「清空记录」按钮**：能删的审计不叫审计。 |
 | `views/admin/UsersView.vue` | 中 | 用户管理页（`/admin/users`）：表格（行内改角色、启停、重置密码、强制下线、删除）+ 搜索/角色/状态筛选 + offset 分页；行内操作失败整页重拉，界面不和后端不一致地挂着。 |
 | `components/UserMenu.vue` | 小 | 顶栏头像下拉：用户管理（仅 admin）/ 系统提示词 / 修改密码 / 退出登录。点外部或 Esc 关闭。**顶栏只留一个头像按钮**：四个文字按钮并排会把顶栏变成工具条 |
 
@@ -465,6 +472,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
         │   ├── ChangePasswordDialog.vue  emits↑ close / changed(LoginResult) → ChatView.setSession()
         │   └──（「用户管理」菜单项 → router.push('/admin/users')）
         ├── views/admin/UsersView.vue   /admin/users（懒加载，独立分包）
+        ├── views/admin/AuditView.vue   /admin/audit（操作记录，hidden 路由）
         │   ├── admin/UserFormDialog.vue / admin/ResetPasswordDialog.vue
         │   └── common/ConfirmDialog.vue（删号要求输入用户名）
         ├── ForbiddenView.vue  /403
@@ -625,6 +633,22 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 > **字节存库而不是存磁盘**是刻意取舍：备份变慢、库变大，换来部署面只有一个 MySQL。限 5MB × 4 张/消息把量级压住。
 > **孤儿附件没有定时清理**：传了没发的附件会一直留在库里，直到它所属的会话被删（前端「空会话回收」会顺手带走）。见 13.1。
 
+**`admin_audit_log`（管理端操作审计）** — 实体 `entity/AdminAuditLog.java`
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `id` | `bigint` | PK, AUTO_INCREMENT | |
+| `actor_id` | `bigint` | NOT NULL，**无外键** | 操作者 id。不建外键：删号是功能，管理员自己也可能被删，留痕不该反过来挡住删人 |
+| `actor_name` | `varchar(50)` | NOT NULL | 操作者用户名**快照**：账号被删后这是唯一线索 |
+| `action` | `varchar(32)` | NOT NULL | 动作名，取值见 `entity/AuditAction`。存字符串不用 ENUM：加动作零迁移 |
+| `target_id` | `bigint` | NOT NULL，**无外键** | 目标用户 id；DELETE_USER 之后目标行已不存在，留 id 做线索 |
+| `target_name` | `varchar(50)` | NOT NULL | 目标用户名快照，理由同 `actor_name` |
+| `detail` | `varchar(255)` | NULL | 变更明细（`role 0 → 1`、`生成随机密码，强制下次改密`…），给人看的不做解析 |
+| `created_at` | `datetime(6)` | NOT NULL | `@PrePersist` 写入；索引 `idx_audit_created` 留给以后的按时间范围查询 |
+
+> 审计**只记成功的写操作**，且与业务操作同一个事务：业务回滚则审计一起回滚，不留「操作失败了却有一条留痕」的假记录。
+> 新表用 `CREATE TABLE IF NOT EXISTS`，全新库与旧库都靠 `init.sql` 这一段，**不需要 ALTER**（`ddl-auto=update` 也会自建）。
+
 ### 6.2 初始化与结构同步
 
 两条等价路径，任选其一：
@@ -639,7 +663,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 
 ## 七、API 接口汇总
 
-### 7.1 全量接口表（共 22 个）
+### 7.1 全量接口表（共 23 个）
 
 | # | 方法 | 路径 | 鉴权 | 成功状态码 | 请求体 | 响应体 | 后端入口 |
 |---|---|---|---|---|---|---|---|
@@ -665,10 +689,11 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | 20 | POST | `/api/admin/users/{id}/password` | **类级 `@RequireAdmin`** | 200 | `ResetPasswordRequest`（`generate` 与 `newPassword` 二选一） | `ResetPasswordResult`（随机密码**只回显这一次**） | `AdminUserController.resetPassword` |
 | 21 | POST | `/api/admin/users/{id}/revoke` | **类级 `@RequireAdmin`** | **204** | — | — | `AdminUserController.revoke` |
 | 22 | DELETE | `/api/admin/users/{id}` | **类级 `@RequireAdmin`** | **204** | — | — | `AdminUserController.delete` |
+| 23 | GET | `/api/admin/audit` | **类级 `@RequireAdmin`** | 200 | —（query：`page`(0 起) / `size`(默认 20、上限 100)） | `PageVO<AdminAuditLogVO>`（id 倒序） | `AdminAuditController.list` |
 
 
 > 3~7 号接口的控制器方法都声明了 `CurrentUser` 形参（解析见 `CurrentUserArgumentResolver`），归属校验统一在 `ConversationService` / `ChatService` 里做：**查不到或不是自己的会话一律 404**，管理员也没有跨用户特权。15~22 号的 `CurrentUser` 不为鉴权（类级注解已经拦了），为的是 `AdminUserService` 的自我保护规则（见 8.6）。
-前端封装位置：1~14 号在 `chatbot-web/src/api.ts`，15~22 号在 `chatbot-web/src/api/userAdmin.ts`（平级模块各开一个 api 文件，传输层共用 `api/client.ts`）。
+前端封装位置：1~14 号在 `chatbot-web/src/api.ts`，15~23 号在 `chatbot-web/src/api/userAdmin.ts`（平级模块各开一个 api 文件，传输层共用 `api/client.ts`）。
 > 13 号超大小限制返回 **413**（不是 400）：异常在 multipart 解析阶段抛出，到不了 `AttachmentService` 里那道给中文文案的校验，所以由 `GlobalExceptionHandler` 的 `MaxUploadSizeExceededException` 处理器接住。14 号**不能用 `<img src>` 直接引用**：img 带不了 `Authorization` 头，而项目刻意不做 `?token=` 兜底。
 > 15~22 号的 400 文案全是中文且面向操作者：分页越界、未知角色/状态、用户名已存在、数据冲突、自我保护规则（「不能删除自己」「系统至少需要保留一个启用的管理员」…），见 8.6。
 
@@ -713,6 +738,10 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 // ResetPasswordRequest / ResetPasswordResult
 { "generate": true }                 // 或 { "newPassword": "xxxxxx" }（6~64）
 { "generatedPassword": "CgR7U8MwjMDEGjbC", "mustChangePassword": true }   // 手输模式 generatedPassword 为 null
+
+// AdminAuditLogVO —— GET /api/admin/audit 的一行（actor / target 都是 id + 名字快照）
+{ "id": 6, "actorId": 1, "actorName": "admin", "action": "DELETE_USER", "actionLabel": "删除用户",
+  "targetId": 2, "targetName": "carol", "detail": "级联删除其名下的会话 / 消息 / 附件", "createdAt": "..." }
 
 // ConversationVO
 { "id": 12, "title": "新的对话", "createdAt": "...", "updatedAt": "..." }
@@ -962,6 +991,10 @@ send():
 区别：重置改密码 + 置 `mustChangePassword=1`（本人下次登录被强制改密）；下线只踢会话，原密码还能登回来——
 怀疑 token 泄漏用下线，怀疑密码泄漏才用重置。
 
+**操作审计**：六个写操作（建号 / 改角色 / 启停 / 重置密码 / 强制下线 / 删号）成功后各记一行 `admin_audit_log`，
+写入点在 `AdminUserService` 各自的 `@Transactional` 里（经 `AdminAuditService.record()`），与业务同事务。
+读取走 `GET /api/admin/audit`（23 号接口），界面是 `/admin/audit`（只读、无清空按钮）。
+
 ## 九、安全设计要点
 
 1. **密码存储**：BCrypt（cost 10）哈希，从不存明文，任何接口都不返回该字段（`UserVO` 里没有 password）。
@@ -985,7 +1018,8 @@ send():
 17. **人设隐私**：`system_prompt` 只在用户自己的 `/me`、登录响应和改人设响应里出现；管理员视角的 `AdminUserVO` 连这个字段都没有——「能列用户」不等于「能看别人的设置」。改人设**不换发 token**（与改密码刻意不同）：它不是安全事件，不该踢掉自己的其他设备。 |
 19. **管理端自我保护**：不能对自己改状态 / 降角色 / 重置密码 / 强制下线 / 删除，也不能动掉「最后一个启用的管理员」，一律 400。其中「最后一个管理员」那道闸在现有自我保护下其实不可达（actor 与 target 都是启用管理员时 count 必然 ≥2），**留着是防御纵深**：将来加批量接口或调整自我保护规则时它才会上场，别当死代码删。
 20. **随机密码只回显一次**：`ResetPasswordResult.generatedPassword` 只在那一次响应里出现，后端不留明文（库里只有 BCrypt 哈希）；前端弹窗关掉就再也看不到，界面上明确写「只显示这一次」。
-21. **删号不留痕是刻意的**：`owner_id` 是 NOT NULL + RESTRICT，做软删除就得给所有会话找一个「已注销」替身账号，反而造出一个谁都能看见的幽灵用户；要留痕应该是审计日志的事（P2），不是靠留着登录行。
+21. **删号不做软删除是刻意的**：`owner_id` 是 NOT NULL + RESTRICT，软删除就得给所有会话找一个「已注销」替身账号，反而造出一个谁都能看见的幽灵用户。「谁动过这个账号」的留痕由 `admin_audit_log` 承担（见 8.6），不靠留着登录行。
+22. **审计与业务同事务、且只记成功**：`AdminAuditService.record()` 必须在调用方自己的 `@Transactional` 里调——操作回滚则审计一起回滚，否则会出现「操作失败了却有一条留痕」的假记录，比没有审计更误导。审计表不建外键、应用层不开删除入口（repository 里没有 update/delete 方法），清历史只能走运维 SQL。
 18. **禁用立刻生效，且不留枚举口子**：AuthInterceptor 每请求回表，所以禁用后目标账号的**下一个请求**就 401，不用等 token 自然过期；登录接口对禁用账号返回 403，但**放在密码校验之后**——顺序反了的话，「这个用户名存在但被禁用了」就成了一个可枚举的信息。已知限制：正在跑的 SSE 不会被打断（拦截器只在请求开始时执行）。 |
 ---
 18. **附件字节走鉴权接口而不是公开 URL**：`GET /api/attachments/{id}` 默认要登录（不在 `PUBLIC_PATHS`），归属校验与会话同一口径（404）；前端 fetch 成 blob 再转 objectURL。**刻意不做 `?token=` 兜底**（长期凭证进 URL / 日志 / 浏览器历史），也不把 base64 塞进消息 JSON（响应体膨胀几十倍）。出网 `Content-Type` 只能取白名单 5 种图片 MIME + `nosniff`，改名上传的 HTML 不会被当页面执行；**白名单刻意不含 SVG**（能带脚本）。
@@ -1085,7 +1119,7 @@ npm run preview      # 本地预览 dist/
 3. **联网搜索拿不到引用来源**：OpenAI 兼容协议不支持「返回搜索来源 / 角标标注」（只有 DashScope 原生协议支持），所以界面上没有「参考了哪几个网页」；要做引用 UI 得换协议，是另一个工程量。
 4. **`LlmClient` Bean 启动时定型**（Mock vs OpenAI 兼容实现二选一，运行期改 `llm.api-key` 必须重启）；但**模型 id 已可每请求切换**（`llm.available-models` 白名单 + 请求体 `model`），不再是「全服务只有一个模型」。
 5. **图片占的 token 不计入 `llm.max-history-tokens` 预算**：估算器只认文字，视觉 token 由分辨率决定、本地算不准。带图会话的真实上下文大小以用量里的 `prompt_tokens` 为准（实测一张 320×200 的图约 90 token，且每轮历史都会重发）。要严格控制成本得改成按 usage 回填的动态预算。
-7. **管理台没有批量操作，也没有审计日志**：一次只能改一行；「谁在什么时候对谁做了什么」目前无记录，删号也不留痕（见九 21）。两者都列为后续项。
+7. **管理台没有批量操作**：一次只能改一行（批量禁用 / 批量改角色列为后续项）。操作审计已于 2026-09-25 落地（`admin_audit_log` + `/admin/audit`，见 8.6），但只覆盖用户管理的六个写操作，未来其他管理模块接入时要各自调 `AdminAuditService.record()`。
 6. **孤儿附件没有定时清理**：传上来了但没随消息发出去的附件会一直留在库里，直到所属会话被删（前端「空会话回收」会顺手带走）。项目没有 `@Scheduled`，加清理任务得先引调度。
 7. **图片只进 Chat Completions 的 `image_url`，不做 OCR / 图像检索 / 生成**：要「以图搜图」或生图是另一个工程量（百炼有独立的多模态接口）。
 
@@ -1124,6 +1158,7 @@ npm run preview      # 本地预览 dist/
 32. **掉登录态回登录页只有 App.vue 的 `watch(isAuthenticated)` 一个口子**：别在组件里各自写 `router.replace('/login')`，否则 401、退出登录、token 被别的标签页清掉这三条路径会各走各的逻辑。
 34. **管理台分页是 offset（`PageVO`），消息历史是游标（`MessagePageVO`），两套别混**：管理台要总数和「第几页」，聊天只要「还能不能往前翻」；给消息列表加 total 等于在 LONGTEXT 大表上多跑一次 count(*)。
 35. **LIKE 关键字必须转义 `% _ \`**（`UserSpecifications.escapeLike`）：否则搜「100%」变成前缀匹配、搜「_」命中所有人；用户输入不该被当 SQL 通配符。`toLowerCase` 用 `Locale.ROOT`，跟着系统区域走会在土耳其语环境搜不出结果。
+37. **审计的 `action` 是字符串不是 ENUM，别「顺手」改成 enum**：加审计动作应该是零迁移的（往 `AuditAction` 加常量即可）；改成 ENUM 每加一个动作都要手工 ALTER 列。`AuditAction.label()` 对不认识的动作名**原样返回**，是因为回滚过版本后表里可能出现新代码不认识的老动作，界面不该因此整页崩。
 36. **重置密码的 `generatedPassword` 不要存进任何前端状态**：它只在响应里出现一次；弹窗展示后随组件卸载丢弃。存 localStorage 等于把明文密码写盘。
 33. **本机 `mvnw` 默认跑在 JDK 1.8 上**（`JAVA_HOME` 指向 `C:\Program Files\Java\jdk-1.8`）：record、`instanceof` 模式匹配全不认识，报一堆「需要 class, interface, enum」，看起来像代码写错了其实是工具链。编译 / 启动本项目前必须 `JAVA_HOME` 指到 26（IntelliJ 装在 `~/.jdks/openjdk-26.0.2.1`），IDE 里跑不受影响是因为 IDE 用自己下载的 JDK。
 24. **历史 token 预算是估算值**：没有分词器可用，按「中文 1 字 1 token、其余 4 字符 1 token」近似；预算是保护性上限不是精确配额。每轮真实上下文大小以用量里的 `prompt_tokens` 为准（界面已显示），两者对不上时信后者。 |
@@ -1173,5 +1208,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-25（第十七次） | **管理端接口（用户管理二阶段）**。`/api/admin/users` 八个接口（列表分页+筛选 / options 字典 / 建号 / 改角色 / 启停 / 重置密码 / 强制下线 / 删号级联），类级 `@RequireAdmin`；新增 `AdminUserService` / `AdminUserController` / `UserSpecifications` / `PageVO` 等 8 个 DTO；三个 repository 加 `deleteByOwnerId`；`GlobalExceptionHandler` 加 `DataIntegrityViolationException` → 400。自我保护规则与删号级联见新增的 8.6；九 加 19~21 条、13.1 加第 7 条、13.2 加 34~36 条。同时删除遗留的 `GET /api/users`（唯一调用方是只读弹窗）。临时库实测八个接口的成功 / 400 / 403 / 404 与删号级联 |
 | 2026-09-25（第十八次） | **用户管理页面（/admin/users）**：第一个和聊天平级的功能模块。`views/admin/UsersView.vue`（表格 + 行内改角色/启停 + 搜索筛选 + offset 分页）、`components/admin/{UserFormDialog,ResetPasswordDialog}.vue`、`components/common/ConfirmDialog.vue`（删号要求输入用户名）、`api/userAdmin.ts`、`types.ts` 管理端类型、`routes.ts` 注册（懒加载、独立分包）；`AppShell` 挂关不掉的强制改密框（`ChangePasswordDialog` 加 `force`），`ModuleNav` 底部加账号按钮 + 退出登录（管理页没有聊天顶栏的头像菜单）。浏览器实测：建号/禁用/重置/删号全链路、普通用户送 /403 且导航只剩聊天、强制改密框自动弹出并可完成 |
 | 2026-09-25（第十九次） | **用户管理入口从弹窗改为平级模块跳转**：`UserMenu` 的「用户管理」`router.push('/admin/users')`；删除 `UserListDialog.vue` 与 `api.ts` 的 `listUsers`（留着就是「两个地方都能看用户列表」的重复入口）。ChatView 只动 5 行 |
+| 2026-09-25（第二十次） | **操作审计日志**。新表 `admin_audit_log`（actor/target 存 id+名字快照、不建外键；action 存字符串不用 ENUM）+ `entity/AuditAction` + `AdminAuditLogRepository`（只读不改）+ `AdminAuditService`（record 与业务同事务 / page）+ `AdminAuditController`（`GET /api/admin/audit`，23 号接口）+ `AdminAuditLogVO`；`AdminUserService` 六个写操作各记一行（`create` 补 `CurrentUser` 形参）。前端 `views/admin/AuditView.vue`（`/admin/audit`，hidden 路由，UsersView 头部「操作记录」链接进入，只读无清空按钮）+ `api/userAdmin.ts` 的 `listAdminAudit`。临时库实测：六个动作各留一行、失败操作（400）不留痕、删号后靠 target_name 认人、非管理员 403。6.1 加表结构、7.1 加 23 号、8.6 加审计段、九 加 22 条、13.1 第 7 条改写、13.2 加 37 条 |
 *最后更新：2026-09-25*
 

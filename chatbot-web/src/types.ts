@@ -175,3 +175,21 @@ export interface ResetPasswordResult {
   mustChangePassword: boolean
 }
 
+/**
+ * 后端 AdminAuditLogVO：管理端操作审计的一行（GET /api/admin/audit）。
+ * actor / target 都是 id + 名字快照：账号被删之后，名字是唯一的线索。
+ */
+export interface AdminAuditLog {
+  id: number
+  actorId: number
+  actorName: string
+  /** 动作名（CREATE_USER / UPDATE_ROLE / …）；老数据里可能出现新代码还不认识的值。 */
+  action: string
+  /** 后端给的中文名；不认识的动作名原样回传，直接展示即可。 */
+  actionLabel: string
+  targetId: number
+  targetName: string
+  detail: string | null
+  createdAt: string
+}
+
