@@ -170,7 +170,16 @@ export interface Page<T> {
 
 /** GET /api/admin/users/options：角色 / 状态字典。下拉选项用它生成，前端不写死 0/1。 */
 export interface UserAdminOptions {
+  /**
+   * **可指派**的角色（层级严格低于当前登录者：超管 3 项、管理员 2 项）。
+   * 只给「新建用户 / 行内改角色」的下拉用——下拉里没有的选项比「选了才报错」干净。
+   */
   roles: { code: number; label: string }[]
+  /**
+   * 全部已知角色（层级从高到低），只给列表的**角色筛选器**用。
+   * 筛选是读操作：管理员在列表里看得见管理员 / 超管的行（控件锁死），筛选器自然也要能筛出来。
+   */
+  allRoles: { code: number; label: string }[]
   statuses: { code: number; label: string }[]
 }
 

@@ -110,7 +110,7 @@ curl.exe -s -X PUT http://localhost:8089/api/users/me/system-prompt -H $h -H "Co
 curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":"今天上海天气","enableSearch":true}'
 curl.exe -s -i http://localhost:8089/api/conversations/99999/messages -H $h
 curl.exe -s "http://localhost:8089/api/admin/users?page=0&size=20" -H $h          # 管理端：分页列表
-curl.exe -s http://localhost:8089/api/admin/users/options -H $h                   # 角色 / 状态字典
+curl.exe -s http://localhost:8089/api/admin/users/options -H $h                   # 字典：roles=可指派（按层级过滤）/ allRoles=全量（筛选用）
 curl.exe -s -X POST http://localhost:8089/api/admin/users -H $h -H "Content-Type: application/json" -d '{"username":"alice","password":"alice-123456"}'
 curl.exe -s -X PUT http://localhost:8089/api/admin/users/2/status -H $h -H "Content-Type: application/json" -d '{"status":1}'
 curl.exe -s -X POST http://localhost:8089/api/admin/users/2/password -H $h -H "Content-Type: application/json" -d '{"generate":true}'

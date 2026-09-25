@@ -253,9 +253,12 @@ function formatTime(iso: string | null): string {
         @keyup.enter="search"
       />
       <button class="btn-ghost" type="button" @click="search">搜索</button>
+      <!-- 筛选器用 allRoles（全量角色）而不是 roles：roles 是「我能指派的角色」，
+           按层级过滤过，管理员拿不到「管理员 / 超管」两档，可列表里这两档的行是看得见的。
+           读操作用读口径，写操作用写口径，别共用一份数据。 -->
       <select v-model="roleSel" class="field-input filter" @change="onFilterChange">
         <option value="">全部角色</option>
-        <option v-for="r in options?.roles ?? []" :key="r.code" :value="String(r.code)">{{ r.label }}</option>
+        <option v-for="r in options?.allRoles ?? []" :key="r.code" :value="String(r.code)">{{ r.label }}</option>
       </select>
       <select v-model="statusSel" class="field-input filter" @change="onFilterChange">
         <option value="">全部状态</option>

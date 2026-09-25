@@ -200,7 +200,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `AttachmentVO.java` | `(id, mime, fileName, size)`：附件元信息，**不含字节**。上传接口的响应、`MessageVO.attachments` 的元素都是它；字节另走 `GET /api/attachments/{id}` |
 | `ChatEvent.java` | SSE 事件体 `(type, content, messageId, model, promptTokens, completionTokens, reasoningTokens)` + `@JsonInclude(NON_NULL)`。静态工厂：`reasoning(content)` / `delta(content)` / `done(saved)`（把入库消息的模型与用量一起带上）/ `error(content)`。**错误文案在 `content`，不是 `message` 字段。** |
 | `UserVO.java` | `(id, username, role, roleLabel, systemPrompt, createdAt, mustChangePassword)`。**没有 password 字段**：BCrypt 哈希也不能出网。`roleLabel` / `statusLabel` 由后端 `Roles.label()` / `UserStatus.label()` 给出，前端不维护映射。`mustChangePassword` 是给「刚认证的这个会话」的指令（登录与 `/me` 都带）。 |
-| `AdminUserVO.java` 等 9 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword` / **`canManage`（当前操作者能不能管这一行，前端据此锁控件）**，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult` / `AdminAuditLogVO`（审计行，`actionLabel` 中文由 `AuditAction.label()` 给）。 |
+| `AdminUserVO.java` 等 9 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword` / **`canManage`（当前操作者能不能管这一行，前端据此锁控件）**，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典：`roles` 是**可指派**的角色，按操作者层级过滤；`allRoles` 是全量角色，只给列表筛选器用）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult` / `AdminAuditLogVO`（审计行，`actionLabel` 中文由 `AuditAction.label()` 给）。 |
 | `ConversationVO.java` | `(id, title, createdAt, updatedAt)` |
 | `MessageVO.java` | `(id, role小写字符串, content, reasoning, model, promptTokens, completionTokens, reasoningTokens, attachments, createdAt)`。`attachments` 是 `List<AttachmentVO>`，**没图时传 null 而不是空数组**（NON_NULL 会把整个字段省掉）。record 上 `@JsonInclude(NON_NULL)`：没有的字段干脆不下发 |
 | `RenameConversationRequest.java` | `(title)`，`@NotBlank` + `@Size(max=100)`（100 是 `conversation.title` 列宽） |
@@ -394,7 +394,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `components/admin/UserFormDialog.vue` | 小 | 新建用户：用户名 / 初始密码（可一键生成，`crypto.getRandomValues` + 去易混字符）/ 角色 / 状态；选项来自 `/options` 字典。 |
 | `components/admin/ResetPasswordDialog.vue` | 小 | 重置密码：生成随机 / 手输两种模式；生成模式下明文**只展示这一次**（readonly + 复制按钮 + 醒目提示），关掉就再也看不到。 |
 | `views/admin/AuditView.vue` | 小 | 操作记录页（`/admin/audit`，`meta.hidden` 不进导航条，从 UsersView 的「操作记录」链接进入）：时间 / 操作者 / 动作 / 目标 / 明细 + 分页。**只读且没有「清空记录」按钮**：能删的审计不叫审计。 |
-| `views/admin/UsersView.vue` | 中 | 用户管理页（`/admin/users`）：表格（行内改角色、启停、重置密码、强制下线、删除）+ 搜索/角色/状态筛选 + offset 分页；行内操作失败整页重拉。**层级锁死**：`canManage=false` 或自己的行，角色下拉换成纯文本标签、所有操作按钮 `disabled` + tooltip 说明原因（「不能修改自己的角色与信息」/「只能管理层级低于自己的用户」），不做「看起来能点、点了才 400」。 |
+| `views/admin/UsersView.vue` | 中 | 用户管理页（`/admin/users`）：表格（行内改角色、启停、重置密码、强制下线、删除）+ 搜索/角色/状态筛选 + offset 分页；行内操作失败整页重拉。角色**筛选器**吃 `options.allRoles`（全量），行内改角色与新建弹窗吃 `options.roles`（可指派）。**层级锁死**：`canManage=false` 或自己的行，角色下拉换成纯文本标签、所有操作按钮 `disabled` + tooltip 说明原因（「不能修改自己的角色与信息」/「只能管理层级低于自己的用户」），不做「看起来能点、点了才 400」。 |
 | `components/UserMenu.vue` | 小 | 顶栏头像下拉：用户管理（仅 admin）/ 系统提示词 / 修改密码 / 退出登录。点外部或 Esc 关闭。**顶栏只留一个头像按钮**：四个文字按钮并排会把顶栏变成工具条 |
 
 ### 4.2 ChatView.vue 的状态与行为
@@ -682,7 +682,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | 13 | POST | `/api/conversations/{id}/attachments` | 需要 | **201** | multipart，字段名 `file`（单张 ≤5MB、MIME 白名单 5 种、每会话可多次传） | `AttachmentVO` | `ConversationController.uploadAttachment` |
 | 14 | GET | `/api/attachments/{id}` | 需要 | 200 | — | 图片字节（`Content-Type` = 存的 mime，`nosniff`） | `AttachmentController.get` |
 | 15 | GET | `/api/admin/users` | **类级 `@RequireAdmin`** | 200 | —（query：`keyword` / `role` / `status` / `page`(0 起) / `size`(默认 20、上限 100)） | `PageVO<AdminUserVO>`（按 `id` 升序） | `AdminUserController.list` |
-| 16 | GET | `/api/admin/users/options` | **类级 `@RequireAdmin`** | 200 | — | `UserAdminOptionsVO`（角色 / 状态字典，中文 label 后端给） | `AdminUserController.options` |
+| 16 | GET | `/api/admin/users/options` | **类级 `@RequireAdmin`** | 200 | — | `UserAdminOptionsVO`（角色 / 状态字典，中文 label 后端给；`roles`=可指派、`allRoles`=全量供筛选） | `AdminUserController.options` |
 | 17 | POST | `/api/admin/users` | **类级 `@RequireAdmin`** | **201** | `CreateUserRequest` | `AdminUserVO` | `AdminUserController.create` |
 | 18 | PUT | `/api/admin/users/{id}/role` | **类级 `@RequireAdmin`** | 200 | `UpdateRoleRequest` | `AdminUserVO`（立即生效：拦截器每请求回表） | `AdminUserController.updateRole` |
 | 19 | PUT | `/api/admin/users/{id}/status` | **类级 `@RequireAdmin`** | 200 | `UpdateStatusRequest` | `AdminUserVO`（禁用立即生效） | `AdminUserController.updateStatus` |
@@ -728,8 +728,11 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 { "items": [ ... ], "page": 0, "size": 20, "total": 2, "totalPages": 1 }
 
 // UserAdminOptionsVO —— GET /api/admin/users/options。下拉选项用它生成，前端不写死 code
-// roles 只返回**层级低于当前操作者**的角色（超级管理员看到 3 个，管理员看到 2 个，下拉里根本没有的选项比「选了才说不行」干净）
+// roles = **可指派**的角色，只含层级低于当前操作者的（超级管理员看到 3 个，管理员看到 2 个；下拉里根本没有的选项比「选了才说不行」干净）
+// allRoles = 全量角色（层级从高到低），只给列表的角色**筛选器**用：筛选是读操作，不受指派层级限制
+// 下面是超级管理员看到的形状
 { "roles": [ { "code": 1, "label": "管理员" }, { "code": 0, "label": "普通用户" }, { "code": 3, "label": "访客" } ],
+  "allRoles": [ { "code": 2, "label": "超级管理员" }, { "code": 1, "label": "管理员" }, { "code": 0, "label": "普通用户" }, { "code": 3, "label": "访客" } ],
   "statuses": [ { "code": 0, "label": "启用" }, { "code": 1, "label": "禁用" } ] }
 
 // CreateUserRequest / UpdateRoleRequest / UpdateStatusRequest（role、status 可省略 = 默认 0）
@@ -1163,6 +1166,7 @@ npm run preview      # 本地预览 dist/
 34. **管理台分页是 offset（`PageVO`），消息历史是游标（`MessagePageVO`），两套别混**：管理台要总数和「第几页」，聊天只要「还能不能往前翻」；给消息列表加 total 等于在 LONGTEXT 大表上多跑一次 count(*)。
 35. **LIKE 关键字必须转义 `% _ \`**（`UserSpecifications.escapeLike`）：否则搜「100%」变成前缀匹配、搜「_」命中所有人；用户输入不该被当 SQL 通配符。`toLowerCase` 用 `Locale.ROOT`，跟着系统区域走会在土耳其语环境搜不出结果。
 38. **`sys_user.role` 的 code 与层级（rank）是两回事，别拿 code 比大小**：code 里 `GUEST=3` 比 `ADMIN=1` 大，但层级最低；所有「谁能管谁」的判断必须走 `Roles.rank()`。前端同理：不要写 `role > 1` 这类判断。
+39. **`/options` 的 `roles` 是「可指派」不是「可筛选」**：它按操作者层级过滤过，管理员那份里根本没有「管理员 / 超级管理员」。列表的角色筛选器必须用 `allRoles`，否则管理员在表格里看得见管理员行、筛选器里却筛不出来（看得见、筛不出）。以后任何「按角色过滤」的读路径都走 `allRoles`，写路径才走 `roles`。
 37. **审计的 `action` 是字符串不是 ENUM，别「顺手」改成 enum**：加审计动作应该是零迁移的（往 `AuditAction` 加常量即可）；改成 ENUM 每加一个动作都要手工 ALTER 列。`AuditAction.label()` 对不认识的动作名**原样返回**，是因为回滚过版本后表里可能出现新代码不认识的老动作，界面不该因此整页崩。
 36. **重置密码的 `generatedPassword` 不要存进任何前端状态**：它只在响应里出现一次；弹窗展示后随组件卸载丢弃。存 localStorage 等于把明文密码写盘。
 33. **本机 `mvnw` 默认跑在 JDK 1.8 上**（`JAVA_HOME` 指向 `C:\Program Files\Java\jdk-1.8`）：record、`instanceof` 模式匹配全不认识，报一堆「需要 class, interface, enum」，看起来像代码写错了其实是工具链。编译 / 启动本项目前必须 `JAVA_HOME` 指到 26（IntelliJ 装在 `~/.jdks/openjdk-26.0.2.1`），IDE 里跑不受影响是因为 IDE 用自己下载的 JDK。
@@ -1215,5 +1219,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-25（第十九次） | **用户管理入口从弹窗改为平级模块跳转**：`UserMenu` 的「用户管理」`router.push('/admin/users')`；删除 `UserListDialog.vue` 与 `api.ts` 的 `listUsers`（留着就是「两个地方都能看用户列表」的重复入口）。ChatView 只动 5 行 |
 | 2026-09-25（第二十次） | **操作审计日志**。新表 `admin_audit_log`（actor/target 存 id+名字快照、不建外键；action 存字符串不用 ENUM）+ `entity/AuditAction` + `AdminAuditLogRepository`（只读不改）+ `AdminAuditService`（record 与业务同事务 / page）+ `AdminAuditController`（`GET /api/admin/audit`，23 号接口）+ `AdminAuditLogVO`；`AdminUserService` 六个写操作各记一行（`create` 补 `CurrentUser` 形参）。前端 `views/admin/AuditView.vue`（`/admin/audit`，hidden 路由，UsersView 头部「操作记录」链接进入，只读无清空按钮）+ `api/userAdmin.ts` 的 `listAdminAudit`。临时库实测：六个动作各留一行、失败操作（400）不留痕、删号后靠 target_name 认人、非管理员 403。6.1 加表结构、7.1 加 23 号、8.6 加审计段、九 加 22 条、13.1 第 7 条改写、13.2 加 37 条 |
 | 2026-09-25（第二十一次） | **角色层级模型**：新增 `SUPER_ADMIN=2`（超级管理员）与 `GUEST=3`（访客：应用内权限同普通用户、层级最低，作「降权但不禁用」的承接位）；`Roles.rank()` 表达层级，管理端所有写操作要求「目标层级严格低于操作者」，建号/改角色要求「新角色层级严格低于操作者」，自己的角色界面锁死 + 后端 400 双保险；「最后一个启用的管理者 / 超级管理员」两道闸。种子账号（`AdminUserInitializer` 与 `init.sql`）改为超级管理员，`init.sql` 附老库升级 UPDATE。`AdminUserVO` 加 `canManage`、`/options` 的 roles 按操作者层级过滤，前端锁死行把 select 换成纯文本标签。临时库实测：超管/管理员/访客三种视角的 canManage 与控件锁死状态、越级操作 400 文案、指派平级角色 400、访客 403。6.1 / 7.2 / 8.6 / 九 / 13.2 同步 |
+| 2026-09-25（第二十二次） | **`/options` 拆成「可指派」与「可筛选」两套角色字典**：`UserAdminOptionsVO` 加 `allRoles`（全量角色，层级从高到低），`roles` 语义不变（层级严格低于操作者）；前端 `types.ts` 同步，`UsersView.vue` 的角色**筛选器**改用 `allRoles`（行内改角色与新建弹窗仍用 `roles`）。补的是第二十一次留下的读路径缺口：管理员在列表里看得见管理员 / 超管的行（控件锁死），筛选器却只有「普通用户 / 访客」两档。临时库 + 浏览器实测：超管 roles=3 / allRoles=4，管理员 roles=2 / allRoles=4；管理员按「管理员」「超级管理员」筛选各命中 1 行且 canManage=false、控件全锁；新建弹窗的角色下拉仍无「超级管理员」。2.2 / 4.1 / 7.1 / 7.2 / 13.2 第 39 条同步 |
 *最后更新：2026-09-25*
 
