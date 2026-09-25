@@ -14,7 +14,7 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
   白名单模式：新加的接口默认受保护，不用改配置。
 - token 是自签 HMAC-SHA256，无状态。`auth.token-secret` **少于 32 字符后端直接启动失败**；
   改密码后旧 token 立即失效（payload 的 `iat` 用毫秒，与 `password_changed_at` 比对）。
-- **人设只属于自己**：`PUT /api/users/me/system-prompt` 改的是 token 里那个用户；管理员 `GET /api/users` 拿到的列表里 `systemPrompt` 恒为 null。
+- **人设只属于自己**：`PUT /api/users/me/system-prompt` 改的是 token 里那个用户；管理员视角的 `GET /api/admin/users` 返回 `AdminUserVO`，**连 `systemPrompt` 字段都没有**。
   人设每轮作为 system 消息放在历史最前面，**计入输入 token**——写两千人设每轮就烧两千字输入钱。
 - **会话按用户隔离**：`conversation.owner_id` 记录归属，会话相关接口的控制器都接 `CurrentUser`，校验统一在 service 层。
   查不到或不是自己的会话**一律 404，不返回 403**——403 会把「这个 id 确实存在」泄露出去，而 id 是自增的，
@@ -27,6 +27,9 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
   读取走 `GET /api/attachments/{id}` —— **要登录、按会话归属校验（404 口径与会话一致）**，
   所以前端只能 fetch 成 blob 再转 objectURL，不能用 `<img src>`，也不做 `?token=` 兜底。
   单张 ≤5MB、每条消息 ≤4 张、MIME 白名单 5 种位图（**无 SVG**）。
+- **管理端全在 `/api/admin/**`，类级 `@RequireAdmin`**：列表（分页+筛选）/ 字典 / 建号 / 改角色 / 启停 /
+  重置密码 / 强制下线 / 删号。自我保护规则（不能对自己下手、不能动掉最后一个启用的管理员）一律 400 中文文案；
+  删号级联删 附件→消息→会话→用户，单事务、**不做软删除**（留用户行就得造一个幽灵替身账号）。细节见 PROJECT_OVERVIEW.md 8.6。
 - **带图请求打到不支持图片的模型会 400**（`llm.vision-models` 白名单），错误文案里列出可用模型。
   校验顺序是刻意的：附件合法性与模型白名单都在用户消息落库**之前**；只有「历史窗口里有旧图、用户刚换了非视觉模型」
   这一种情况会在落库后报 400——那种情况下用户消息还在，换回视觉模型点重新生成即可恢复。
@@ -100,11 +103,18 @@ curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Con
 curl.exe -s -X PUT http://localhost:8089/api/users/me/system-prompt -H $h -H "Content-Type: application/json" -d '{"systemPrompt":"你是资深 DBA，只回答数据库问题"}'
 curl.exe -N -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":"今天上海天气","enableSearch":true}'
 curl.exe -s -i http://localhost:8089/api/conversations/99999/messages -H $h
+curl.exe -s "http://localhost:8089/api/admin/users?page=0&size=20" -H $h          # 管理端：分页列表
+curl.exe -s http://localhost:8089/api/admin/users/options -H $h                   # 角色 / 状态字典
+curl.exe -s -X POST http://localhost:8089/api/admin/users -H $h -H "Content-Type: application/json" -d '{"username":"alice","password":"alice-123456"}'
+curl.exe -s -X PUT http://localhost:8089/api/admin/users/2/status -H $h -H "Content-Type: application/json" -d '{"status":1}'
+curl.exe -s -X POST http://localhost:8089/api/admin/users/2/password -H $h -H "Content-Type: application/json" -d '{"generate":true}'
+curl.exe -s -i -X DELETE http://localhost:8089/api/admin/users/2 -H $h             # 删号：204
 curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "Content-Type: application/json" -d '{"message":""}'
 ```
 
 不带 token 时这四条全部返回 401：拦截器跑在 `@Valid` 和控制器之前，
 所以后两条想看到 404 错误体和 400 校验错误，必须先带上 token。
+管理端那六条还要是**管理员**的 token：普通用户 token 一律 403「需要管理员权限」。
 
 ## 配置
 
@@ -180,4 +190,5 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 ## 后续待加
 
 暂无硬性缺口。候选方向（都已在 PROJECT_OVERVIEW.md 十二节展开）：把 `attachment.data` 换成对象存储 key
-（多实例部署的前提）、给「传了没发」的孤儿附件加定时清理、按 `usage` 回填做动态 token 预算（把图片 token 也算进去）。
+（多实例部署的前提）、给「传了没发」的孤儿附件加定时清理、按 `usage` 回填做动态 token 预算（把图片 token 也算进去）、
+管理台审计日志与批量操作（见 PROJECT_OVERVIEW.md 13.1 第 7 条）。

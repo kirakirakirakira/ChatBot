@@ -117,8 +117,9 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
     src/
       api/client.ts 传输层：fetch 封装、鉴权头、401 兜底（全站唯一一份）
       api.ts        聊天与登录的接口清单、SSE 读流、消息分页参数
+      api/userAdmin.ts  用户管理模块接口（/api/admin/users 八个）；新模块照这个开新文件
       auth.ts       登录态：token / currentUser / isAdmin
-      types.ts      类型定义，与后端 DTO / VO 一一对应
+      types.ts      类型定义，与后端 DTO / VO 一一对应（含管理端 AdminUser / Page / UserAdminOptions）
       session.ts    ensureSession()：本地 token 的一次性有效性确认（守卫里 await）
       router/       index（createRouter）/ routes（模块注册表）/ guards（登录与角色闸门）/ paths（路径常量）
       layouts/      AppShell.vue：左侧模块导航 + 内容区外壳，平级模块都挂在它下面
@@ -128,6 +129,7 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
       views/
         LoginView.vue   登录页（顶层路由，不在外壳里）
         ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考开关 / 模型 / 思考强度 + 停止生成
+        admin/UsersView.vue  用户管理（/admin/users）：表格 + 筛选 + 分页 + 各操作弹窗
         ForbiddenView.vue  /403：已登录但权限不够
         NotFoundView.vue   其余一切路径的兜底
       components/
@@ -135,11 +137,13 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
         MessageBubble.vue         消息气泡，区分 user / assistant；助手消息走 Markdown、用户消息纯文本 + 图片缩略图 + 思考折叠 + 重新生成按钮
         AttachmentThumb.vue       单张图的缩略图：有本地 url 直接用，只有 id 时 fetch 字节转 objectURL（自己 revoke）；点击新标签看原图
         MarkdownContent.vue       Markdown 渲染容器：代码高亮 + 代码块复制按钮 + 流式光标
-        ChangePasswordDialog.vue  修改密码，所有人可见
+        ChangePasswordDialog.vue  修改密码；force 模式下关不掉（管理员重置过密码时由外壳弹出）
         SystemPromptDialog.vue    系统提示词（人设），所有人可见；保存后下一条消息立即生效
-        UserListDialog.vue        用户管理，仅 isAdmin 时可见
-        UserMenu.vue              顶栏头像下拉：用户管理 / 系统提示词 / 修改密码 / 退出登录
-        ModuleNav.vue             左侧模块导航条，条目从 routes.ts 的 meta.moduleId 派生
+        UserMenu.vue              顶栏头像下拉：用户管理（跳 /admin/users）/ 系统提示词 / 修改密码 / 退出登录
+        ModuleNav.vue             左侧模块导航条（条目从 routes.ts 派生）+ 底部账号按钮 / 退出登录
+        common/ConfirmDialog.vue  通用二次确认；requireText 非空时输入一致才点亮确认（删号用）
+        admin/UserFormDialog.vue  新建用户（可一键生成随机密码）
+        admin/ResetPasswordDialog.vue  重置密码（随机密码只展示这一次）
         icons/                    导航图标（24×24 描边、stroke=currentColor）
       assets/main.css
 
@@ -153,3 +157,11 @@ objectURL 的所有权规则：本地创建的归 `ChatView`（切会话 / 卸�
 - 开发期 Vite 自带回退；**生产部署必须让静态服务器把未命中路径回退到 `index.html`**
   （nginx：`try_files $uri /index.html`），否则直接访问或刷新 `/admin/users` 会拿到服务器 404。
 - 登录页是顶层路由（不进外壳），其余页面都挂在 `layouts/AppShell.vue` 下：左侧 56px 模块导航 + 内容区。
+
+## 平级功能模块（以 /admin/users 为例）
+
+- 一个模块 = `views/<模块>/` + `src/api/<模块>.ts` + `routes.ts` 一条记录；管理端接口在后端挂 `/api/admin/**`。
+- `meta.requiresAdmin` 的模块：守卫拦成 `/403`、导航条对普通用户隐藏；真正的权限在后端类级 `@RequireAdmin`，前端只是不给人看一个必然 403 的按钮。
+- `UserVO.mustChangePassword=true` 时外壳弹**关不掉的改密框**（管理员重置过密码），改完才能用任何模块。
+- 退出登录在导航条底部的账号按钮里：管理页没有聊天顶栏的头像菜单，退出是外壳级的事。
+- 管理台视图懒加载：构建产物里是独立分包，普通用户的 bundle 不含管理台代码。
