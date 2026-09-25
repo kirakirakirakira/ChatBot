@@ -54,11 +54,6 @@ export function updateSystemPrompt(systemPrompt: string): Promise<CurrentUser> {
   })
 }
 
-/** 用户列表，仅管理员（后端 @RequireAdmin；普通用户会拿到 403）。 */
-export function listUsers(): Promise<CurrentUser[]> {
-  return request<CurrentUser[]>('/users')
-}
-
 export function createConversation(): Promise<Conversation> {
   return request<Conversation>('/conversations', { method: 'POST' })
 }

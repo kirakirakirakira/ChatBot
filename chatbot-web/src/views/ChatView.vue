@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import AttachmentThumb from '@/components/AttachmentThumb.vue'
 import ConversationSidebar from '@/components/ConversationSidebar.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
 import SystemPromptDialog from '@/components/SystemPromptDialog.vue'
-import UserListDialog from '@/components/UserListDialog.vue'
 import UserMenu from '@/components/UserMenu.vue'
 import type { AttachmentRef, CurrentUser, LoginResult, Message as MessagePageItem, UiMessage } from '@/types'
 import type { StreamHandlers, StreamOptions } from '@/api'
@@ -141,8 +141,6 @@ const fatalError = ref('')
 const showPasswordDialog = ref(false)
 /** 系统提示词（人设）弹窗：所有用户可见，改的是自己那份。 */
 const showPromptDialog = ref(false)
-/** 用户管理弹窗：只有管理员看得到入口，普通用户点了也会被后端 403 挡住。 */
-const showUserDialog = ref(false)
 
 /** 新建对话的前提：没有选中对话，或选中的对话已经有消息。防止连点攒出一排空对话。 */
 const canCreateConversation = computed(() => activeId.value === null || messages.value.length > 0)
@@ -171,6 +169,13 @@ function scrollToBottom(): void {
       el.scrollTop = el.scrollHeight
     }
   })
+}
+
+const router = useRouter()
+
+/** 头像菜单的「用户管理」：跳到平级模块 /admin/users。入口本身只对管理员显示，路由守卫还会再拦一道。 */
+function goUserAdmin(): void {
+  void router.push('/admin/users')
 }
 
 /** 退出登录：先掐断可能还在跑的 SSE，再清登录态，App.vue 会立刻换回登录页。 */
@@ -744,7 +749,7 @@ onBeforeUnmount(() => {
           v-if="currentUser"
           :user="currentUser"
           :is-admin="isAdmin"
-          @users="showUserDialog = true"
+          @users="goUserAdmin"
           @prompt="showPromptDialog = true"
           @password="showPasswordDialog = true"
           @logout="logout"
@@ -912,7 +917,6 @@ onBeforeUnmount(() => {
       @close="showPasswordDialog = false"
       @changed="onPasswordChanged"
     />
-    <UserListDialog v-if="showUserDialog" @close="showUserDialog = false" />
     <SystemPromptDialog
       v-if="showPromptDialog"
       :initial="currentUser?.systemPrompt ?? ''"
