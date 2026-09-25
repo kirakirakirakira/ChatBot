@@ -77,6 +77,11 @@ message 是处理器自己填进去的。另外每个 handler 都显式设了 `C
 否则内容协商会因为 `Accept: text/event-stream` 变成 406，把真实状态码盖掉。
 chat 接口出错时返回的是上面的 SSE `error` 事件，不是这个结构。
 
+账号被**禁用**时的两个状态码，文案是同一句「账号已被禁用，请联系管理员」：
+已登录的下一个请求 **401**（`AuthInterceptor` 每请求回表，立刻生效，不用等 token 过期）；登录接口 **403**，
+且**放在密码校验之后**——顺序反了的话「用户名存在但被禁用」就成了可枚举信息。
+`must_change_password=1` 的账号登录会拿到 `UserVO.mustChangePassword=true`，前端据此强制改密。
+
 ## 手动测试
 
 所有接口都要先登录换 token：

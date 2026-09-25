@@ -2,6 +2,7 @@ package com.chatbot.chatbot.service;
 
 import com.chatbot.chatbot.auth.CurrentUser;
 import com.chatbot.chatbot.auth.TokenService;
+import com.chatbot.chatbot.auth.UserStatus;
 import com.chatbot.chatbot.dto.ChangePasswordRequest;
 import com.chatbot.chatbot.dto.LoginRequest;
 import com.chatbot.chatbot.dto.LoginResponse;
@@ -41,6 +42,11 @@ public class UserService {
         this.dummyHash = passwordEncoder.encode(UUID.randomUUID().toString());
     }
 
+    /**
+     * 登录。@Transactional 是给 touchLastLogin() 那条 @Modifying 更新用的——
+     * 修改类 JPQL 没有事务会直接抛 TransactionRequiredException。
+     */
+    @Transactional
     public LoginResponse login(LoginRequest request) {
         User user = userRepository.findByUsername(request.username().trim()).orElse(null);
         String storedHash = (user == null) ? dummyHash : user.getPassword();
@@ -48,6 +54,15 @@ public class UserService {
             // 「用户不存在」和「密码错」返回同一句话，不给用户名枚举留口子
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
         }
+        if (user == null) {
+            // 理论不可达：密码匹配上了一个随机 UUID 的哈希。兜成和上面同一句，不新增文案分支
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户名或密码错误");
+        }
+        // 先验密码、再报禁用：顺序反了的话，「这个用户名存在但被禁用了」就成了一个可枚举的信息
+        if (!UserStatus.isEnabled(user.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "账号已被禁用，请联系管理员");
+        }
+        userRepository.touchLastLogin(user.getId(), LocalDateTime.now());
         return issueSession(user);
     }
 
@@ -90,6 +105,8 @@ public class UserService {
         }
         user.setPassword(passwordEncoder.encode(request.newPassword()));
         user.setPasswordChangedAt(LocalDateTime.now());
+        // 管理员重置密码留下的「强制改密」标记，在本人真的改过一次之后就完成使命了
+        user.setMustChangePassword(Boolean.FALSE);
         userRepository.save(user);
         return issueSession(user);
     }

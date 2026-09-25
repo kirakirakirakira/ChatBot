@@ -107,7 +107,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 │   └── src/
 │       ├── main/java/com/chatbot/chatbot/
 │       │   ├── ChatbotApplication.java
-│       │   ├── auth/           # 7 个文件：token 签发校验 + 拦截器 + 当前用户注入 + 角色
+│       │   ├── auth/           # 8 个文件：token 签发校验 + 拦截器 + 当前用户注入 + 角色 + 账号状态
 │       │   ├── config/         # 6 个文件：Web/CORS、BCrypt、LLM Bean、种子管理员、全局异常
 │       │   ├── controller/     # 6 个文件：Auth / Conversation / Chat / User / Llm / Attachment
 │       │   ├── dto/            # 15 个文件：请求体、响应 VO、SSE 事件、统一错误体
@@ -157,12 +157,13 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | 文件 | 职责 |
 |---|---|
 | `TokenService.java` | token 的签发与校验。格式 `base64url(payloadJson) + "." + base64url(HMAC-SHA256签名)`，思路同 JWT HS256 但不引 JWT 库，只用 JDK `Mac` + Jackson。内部 record `TokenPayload(long uid, String username, int role, long iat, long exp)`；`iat`/`exp` 用 **epoch 毫秒**（秒级精度分不开「改密码那一秒签发的旧 token」）。密钥短于 `MIN_SECRET_LENGTH = 32` 字符时**构造函数直接抛异常、后端启动失败**。签名比较用 `MessageDigest.isEqual` 常量时间比对。对外方法：`issue(User)`、`verify(String)`、`ttlSeconds()`。 |
-| `AuthInterceptor.java` | `HandlerInterceptor.preHandle`。① 非 `HandlerMethod`（CORS 预检、静态资源、404）直接放行；② 只认 `Authorization: Bearer <token>`，**不做 `?token=` 兜底**（会进访问日志）；③ `TokenService.verify()` 校签名与有效期；④ **回表查一次用户**（`userRepository.findById`），让删号/改角色/改密码立刻生效；⑤ 比较 `payload.iat()` 与 `user.passwordChangedAt`（都转 epoch 毫秒），旧 token 作废；⑥ `@RequireAdmin` 检查（方法级或类级注解）；⑦ 把 `CurrentUser` 放进 request attribute，key = 常量 `CURRENT_USER_ATTRIBUTE = "chatbot.currentUser"`。401 与 403 都抛 `ResponseStatusException`。 |
+| `AuthInterceptor.java` | `HandlerInterceptor.preHandle`。① 非 `HandlerMethod`（CORS 预检、静态资源、404）直接放行；② 只认 `Authorization: Bearer <token>`，**不做 `?token=` 兜底**（会进访问日志）；③ `TokenService.verify()` 校签名与有效期；④ **回表查一次用户**（`userRepository.findById`），让删号/改角色/改密码/禁用立刻生效；⑤ `UserStatus.isEnabled(user.status)` 为假 → 401「账号已被禁用」（**禁用因此立刻生效，不用等 token 过期**）；⑥ 比较 `payload.iat()` 与 `user.passwordChangedAt`（都转 epoch 毫秒），旧 token 作废；⑦ `@RequireAdmin` 检查（方法级或类级注解）；⑧ 把 `CurrentUser` 放进 request attribute，key = 常量 `CURRENT_USER_ATTRIBUTE = "chatbot.currentUser"`。401 与 403 都抛 `ResponseStatusException`。 |
 | `AuthProperties.java` | `@ConfigurationProperties(prefix = "auth")` 的 record：`tokenSecret`、`tokenTtlHours`(默认12)、`defaultAdminUsername`(默认 admin)、`defaultAdminPassword`(默认 admin)。由 `AuthConfig` 上的 `@EnableConfigurationProperties` 启用。 |
 | `CurrentUser.java` | record `(Long id, String username, Integer role)` + `isAdmin()`。**刻意不用 ThreadLocal**：`/chat` 是 SSE 异步接口，请求线程与生成线程不是同一个。 |
 | `CurrentUserArgumentResolver.java` | `HandlerMethodArgumentResolver`，让控制器方法直接声明 `CurrentUser` 形参。从 request attribute 取；取不到抛 401（兜底，正常走不到）。 |
 | `RequireAdmin.java` | 注解，`@Target({TYPE, METHOD})` + `RUNTIME`。权限判断统一在 `AuthInterceptor`，不在业务层重复。 |
 | `Roles.java` | 角色常量：`USER = 0`、`ADMIN = 1`；`isAdmin(Integer)`；`label(Integer)` 返回中文名（管理员/普通用户）。`sys_user.role` 存 **int 而非字符串/ENUM**，以后加角色不用改列类型。 |
+| `UserStatus.java` | 账号状态常量：`ENABLED = 0`、`DISABLED = 1`；`isEnabled(Integer)`（null 当启用，只是防御性兜底）、`label(Integer)`。与 `Roles` 同一口径：存 int 不改列类型，以后加「锁定 / 待激活」不用迁移。2026-09-25 加入。 |
 
 **config/ — 装配与全局行为**
 
@@ -559,8 +560,11 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `username` | `varchar(50)` | NOT NULL, UNIQUE `uk_sys_user_username` | 业务上按「忽略首尾空格」后的值存取（`login()` 里 `.trim()`） |
 | `password` | `varchar(100)` | NOT NULL | BCrypt 哈希（固定 60 字符，留余量换算法）。**任何接口都不返回该字段** |
 | `role` | `int` | NOT NULL | `0`=普通用户，`1`=管理员。常量在 `auth/Roles.java` |
+| `status` | `int` | NOT NULL DEFAULT 0 | `0`=启用，`1`=禁用。常量在 `auth/UserStatus.java`。禁用后**登录 403、已登录的下一个请求 401**（AuthInterceptor 每请求回表）。**列带 DEFAULT 是刻意的**：给有数据的旧库加 NOT NULL 列时，没有 DEFAULT 在 MySQL 严格模式下直接失败；有 DEFAULT 则老行填 0=启用，不会把任何人锁在门外。2026-09-25 加入 |
 | `created_at` | `datetime(6)` | NOT NULL | `@PrePersist` 写入，`updatable=false` |
 | `password_changed_at` | `datetime(6)` | NULL | 从没改过密码为 NULL。签发时间（token `iat`）早于它的登录态一律作废 → **改密码会踢掉其他所有设备的会话**。**这列必须保持 `datetime(6)`**：后端按毫秒比较，精度掉到秒会让改密码那一秒签发的旧 token 躲过失效判断 |
+| `last_login_at` | `datetime(6)` | NULL | 最近一次登录成功的时间。`UserService.login()` 用 `UserRepository.touchLastLogin()`（`@Modifying` 单列 update）写入：不 load 实体、不碰其它列，所以 `login()` 是 `@Transactional`。从没登录过为 NULL，不填假时间冒充真实值。2026-09-25 加入 |
+| `must_change_password` | `tinyint(1)` | NOT NULL DEFAULT 0 | 管理员重置过密码、本人还没改。经 `UserVO.mustChangePassword` 在登录响应和 `/me` 里带出，前端据此强制弹改密框（放 `/me` 是为了刷新页面后还能再触发）；本人改密成功后清 0。2026-09-25 加入（重置密码接口本身在 T5） |
 | `system_prompt` | `text` | NULL | 该用户的系统提示词（人设）；NULL = 没设，后端不下发 system 消息。2026-09-24 加入 |
 
 **`conversation`（会话）** — 实体 `entity/Conversation.java`
@@ -668,7 +672,8 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 }
 
 // UserVO —— 没有 password 字段；systemPrompt 只在「自己」的响应里出现，管理员的用户列表里恒为 null
-{ "id": 1, "username": "admin", "role": 1, "roleLabel": "管理员", "systemPrompt": "你是资深 DBA…", "createdAt": "..." }
+{ "id": 1, "username": "admin", "role": 1, "roleLabel": "管理员", "systemPrompt": "你是资深 DBA…", "createdAt": "...", "mustChangePassword": false }
+// mustChangePassword=true = 管理员重置过密码、本人还没改，前端据此强制弹改密框；登录与 /me 都带
 
 // ConversationVO
 { "id": 12, "title": "新的对话", "createdAt": "...", "updatedAt": "..." }
@@ -726,8 +731,8 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 |---|---|
 | 400 | `@Valid` 校验失败（新密码长度不符）、请求体不是合法 JSON、原密码不正确、新密码与原密码相同、**文本和图片同时为空**、附件 id 不可用（不存在 / 属于别的会话 / 已被别的消息占用）、带图但模型不在 `llm.vision-models` 里、上传 MIME 不在白名单、单张超 5MB |
 | 413 | 上传超过 `spring.servlet.multipart.max-file-size`（multipart 解析阶段就抛，`GlobalExceptionHandler` 接住给中文文案） |
-| 401 | 未带 token、token 格式错/签名错/已过期、账号已被删、改过密码导致旧 token 失效。**前端收到任何 401 都 `clearSession()` 弹回登录页** |
-| 403 | 普通用户访问 `@RequireAdmin` 接口（`GET /api/users`） |
+| 401 | 未带 token、token 格式错/签名错/已过期、账号已被删、改过密码导致旧 token 失效、**账号被禁用**（AuthInterceptor 回表发现 `status=DISABLED`，立刻生效）。**前端收到任何 401 都 `clearSession()` 弹回登录页** |
+| 403 | 普通用户访问 `@RequireAdmin` 接口（`GET /api/users`）；**被禁用的账号登录**（文案与 401 同一句，且放在密码校验之后，避免泄露「用户名存在」） |
 | 404 | 会话不存在、**会话属于别人**（归属校验刻意不返回 403，免得泄露「这个 id 存在」）、用户不存在、**附件不存在或属于别人的会话**（同一口径） |
 | 204 | 删除会话成功 |
 
@@ -823,6 +828,9 @@ POST /api/conversations/{id}/chat  {message, enableThinking?, attachmentIds?}
   → UserService.login(): findByUsername(username.trim())
        用户不存在 → 拿预计算的 dummyHash 做一次 BCrypt 比对（防时序攻击）
        matches 失败 → 401「用户名或密码错误」（不区分账号不存在还是密码错）
+       matches 成功但 user == null → 理论不可达（密码匹配上了随机 UUID 的哈希），兜同一句 401
+       status = DISABLED → 403「账号已被禁用，请联系管理员」（**先验密码再报禁用**，否则可枚举）
+  → userRepository.touchLastLogin(id, now)   // @Modifying 单列 update，所以 login() 带 @Transactional
   → TokenService.issue(user): payload = {uid, username, role, iat(ms), exp(ms)}
        token = base64url(payloadJson) + "." + base64url(HMAC-SHA256)
   → LoginResponse{token, "Bearer", ttlSeconds, UserVO}
@@ -833,9 +841,10 @@ POST /api/conversations/{id}/chat  {message, enableThinking?, attachmentIds?}
        ② resolveToken()：只认 Bearer 头，不做 ?token= 兜底
        ③ TokenService.verify()：切分 → base64url 解码 → MessageDigest.isEqual 常量时间比签名 → 反序列化 → 比 exp
        ④ userRepository.findById(payload.uid())：账号没了 → 401
-       ⑤ payload.iat() < user.passwordChangedAt(转 epoch ms) → 401「密码已修改，请重新登录」
-       ⑥ new CurrentUser(id, username, role)；@RequireAdmin 且非管理员 → 403
-       ⑦ request.setAttribute("chatbot.currentUser", currentUser)
+       ⑤ UserStatus.isEnabled(user.status) 为假 → 401「账号已被禁用，请联系管理员」
+       ⑥ payload.iat() < user.passwordChangedAt(转 epoch ms) → 401「密码已修改，请重新登录」
+       ⑦ new CurrentUser(id, username, role)；@RequireAdmin 且非管理员 → 403
+       ⑧ request.setAttribute("chatbot.currentUser", currentUser)
   → CurrentUserArgumentResolver 把它注入控制器形参
 ```
 
@@ -915,6 +924,7 @@ send():
 
 16. **CORS 白名单来自配置**：`cors.allowed-origins` 默认只有 Vite 的 5173，对外部署用 `CORS_ALLOWED_ORIGINS` 覆盖；留空启动失败而不是退化成 `*`。非白名单源的跨域请求拿 403 且不带 `Access-Control-Allow-Origin` 头，同源请求和服务器间调用（不带 Origin 头）不受影响。
 17. **人设隐私**：`system_prompt` 只在用户自己的 `/me`、登录响应和改人设响应里出现；管理员 `GET /api/users` 恒为 null——「能列用户」不等于「能看别人的设置」。改人设**不换发 token**（与改密码刻意不同）：它不是安全事件，不该踢掉自己的其他设备。 |
+18. **禁用立刻生效，且不留枚举口子**：AuthInterceptor 每请求回表，所以禁用后目标账号的**下一个请求**就 401，不用等 token 自然过期；登录接口对禁用账号返回 403，但**放在密码校验之后**——顺序反了的话，「这个用户名存在但被禁用了」就成了一个可枚举的信息。已知限制：正在跑的 SSE 不会被打断（拦截器只在请求开始时执行）。 |
 ---
 18. **附件字节走鉴权接口而不是公开 URL**：`GET /api/attachments/{id}` 默认要登录（不在 `PUBLIC_PATHS`），归属校验与会话同一口径（404）；前端 fetch 成 blob 再转 objectURL。**刻意不做 `?token=` 兜底**（长期凭证进 URL / 日志 / 浏览器历史），也不把 base64 塞进消息 JSON（响应体膨胀几十倍）。出网 `Content-Type` 只能取白名单 5 种图片 MIME + `nosniff`，改名上传的 HTML 不会被当页面执行；**白名单刻意不含 SVG**（能带脚本）。
 19. **上传校验两道**：`spring.servlet.multipart.max-file-size`（413）与 `AttachmentService` 的 5MB / MIME / 张数校验（400 中文文案）是同一个数的两处表达，改一处必须改另一处；前端还有一道同样的本地校验，但后端那道才是兜底。
@@ -1047,6 +1057,7 @@ npm run preview      # 本地预览 dist/
 30. **`ensureSession()` 的 promise 按页面加载缓存**：登录响应自带 user，登录后不需要重验；但同一次页面加载内后端改了角色，界面不会感知，要等下次刷新。想实时就得轮询 `/api/auth/me`，目前刻意不做。
 31. **`?next=` 必须过 `safeNextPath()`**：它是 URL 上的外部可控参数，`//evil.com` 这种协议相对 URL 不挡掉就是一个现成的开放重定向。
 32. **掉登录态回登录页只有 App.vue 的 `watch(isAuthenticated)` 一个口子**：别在组件里各自写 `router.replace('/login')`，否则 401、退出登录、token 被别的标签页清掉这三条路径会各走各的逻辑。
+33. **本机 `mvnw` 默认跑在 JDK 1.8 上**（`JAVA_HOME` 指向 `C:\Program Files\Java\jdk-1.8`）：record、`instanceof` 模式匹配全不认识，报一堆「需要 class, interface, enum」，看起来像代码写错了其实是工具链。编译 / 启动本项目前必须 `JAVA_HOME` 指到 26（IntelliJ 装在 `~/.jdks/openjdk-26.0.2.1`），IDE 里跑不受影响是因为 IDE 用自己下载的 JDK。
 24. **历史 token 预算是估算值**：没有分词器可用，按「中文 1 字 1 token、其余 4 字符 1 token」近似；预算是保护性上限不是精确配额。每轮真实上下文大小以用量里的 `prompt_tokens` 为准（界面已显示），两者对不上时信后者。 |
 
 ### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条）
@@ -1090,5 +1101,6 @@ npm run preview      # 本地预览 dist/
 | 2026-09-24（第十三次） | **图片输入（多模态）**。新增第 4 张表 `attachment`（图片字节存 LONGBLOB）+ `entity/Attachment.java` / `repository/AttachmentRepository.java` / `service/AttachmentService.java` / `controller/AttachmentController.java` / `dto/AttachmentVO.java` / `llm/LlmContentPart.java`；接口 13 → 15 个（`POST /{id}/attachments` multipart、`GET /api/attachments/{id}` 带鉴权出字节）。`LlmMessage.content` 从 String 变 Object（纯文本发字符串、带图发 `[{image_url},{text}]` 数组），`recentHistory` 把附件 base64 内联进历史；`ChatRequest` 加 `attachmentIds` 并**去掉 `@NotBlank`**（纯图片提问合法）；新增 `llm.vision-models` 白名单 + `LlmOptionsVO.visionModels`，带图打到非视觉模型直接 400。前端：`AttachmentThumb.vue`（fetch blob → objectURL，自己 revoke）、输入框「图片」按钮 + 粘贴 + 拖拽、待发送缩略图条、气泡缩略图。配置加 multipart 上限，`GlobalExceptionHandler` 接 413 / 缺字段。实测：4 个模型在兼容协议下都正确读图（320×200 测试图答对形状与颜色）、多轮追问仍带图、重新生成自动带图、9 条负路径（跨会话 / 重复用 / 非视觉 / 超限 / 空消息）全部按预期报错。13.1 删掉「无多模态」重排为 7 条，13.2 加 25~28 条，13.3 追加一条旧偏差 |
 | 2026-09-25（第十四次） | **前端传输层抽离**（为「和聊天平级的功能模块」铺路，纯重构、零行为变化）。新增 `chatbot-web/src/api/client.ts`，把 `api.ts` 里的 `BASE` / `request<T>()` / `withAuth()` / `extractErrorMessage()` **原样搬过去并导出**（`BASE` 更名 `API_BASE`）；`api.ts` 只剩接口清单，改动为「文件头换成两行 import + 3 处 `${BASE}` 改名」。401 仍然调 `clearSession()`，登录态与接口行为与改前完全一致。4.4 第 6 条同步改写：新模块另开 `src/api/<模块>.ts`。`npm run type-check` 与 `npm run build` 均通过 |
 | 2026-09-25（第十五次） | **引入 vue-router@4：URL 即模块**。新增 `router/{index,routes,guards,paths}.ts`、`session.ts`、`layouts/AppShell.vue`、`components/ModuleNav.vue`、`components/icons/IconChat.vue`、`views/{ForbiddenView,NotFoundView}.vue`；`main.ts` 挂 router，`App.vue` 从「三分支权限闸门」改成 `RouterView` + 对 `isAuthenticated` 的全局 watch（掉登录态回登录页的唯一兜底，同时覆盖 401 与主动退出登录），`LoginView` 登录成功后 `router.replace(safeNextPath(next) ?? /chat)`。URL：`/login`、`/chat`、`/403`、404 兜底；平级模块挂 `AppShell` 子路由，导航条目由 `routes.ts` 的 meta 派生（加模块不改导航与守卫）。`ChatView.vue` **零改动**。实测：`/` → `/chat`、未登录 `/chat` → `/login?next=/chat`、`?next=//evil.com` 被拒、SSE 全链路正常、退出登录回登录页、未知路径 404 页带导航条。〇 的「刻意没有 vue-router」删除、一 技术栈加 vue-router、13.2 加 29~32 条 |
+| 2026-09-25（第十六次） | **账号状态基座（用户管理一阶段）**。`sys_user` 加三列：`status int NOT NULL DEFAULT 0`（0 启用 / 1 禁用）、`last_login_at datetime(6) NULL`、`must_change_password tinyint(1) NOT NULL DEFAULT 0`；新增 `auth/UserStatus.java`。`AuthInterceptor` 回表后加禁用检查 → 401「账号已被禁用」（立刻生效）；`UserService.login()` 加 `@Transactional` + 密码校验后判禁用 → 403 + `touchLastLogin()`；本人改密成功后清 `mustChangePassword`；`UserVO` 加 `mustChangePassword`（登录与 `/me` 都带，前端强制改密框在 T6 接）。**不需要删库**：`ddl-auto=update` 直接补列，带 DEFAULT 的 NOT NULL 列让老行填 0，不会锁任何人；`init.sql` 的 CREATE 与「已有库升级」段同步。临时库实测：禁用后旧 token 立刻 401、登录 403、恢复+置标记后登录带 `mustChangePassword=true`、本人改密后清除。6.1 / 7.2 / 8.2 / 九 同步；另发现并记录：本机 `mvnw` 默认走 JDK 1.8（`JAVA_HOME` 指向 jdk-1.8），编本项目必须用 JDK 26 |
 *最后更新：2026-09-25*
 

@@ -51,6 +51,12 @@ public class AuthInterceptor implements HandlerInterceptor {
         User user = userRepository.findById(payload.uid())
                 .orElseThrow(() -> unauthorized("登录状态已失效（账号不存在），请重新登录"));
 
+        // 禁用必须「立刻生效」：拦截器每请求回表，所以不用等 token 自然过期，下一个请求就进不来。
+        // 正在跑的 SSE 不会被打断（拦截器只在请求开始时执行）——已知限制，见 PROJECT_OVERVIEW 13.1。
+        if (!UserStatus.isEnabled(user.getStatus())) {
+            throw unauthorized("账号已被禁用，请联系管理员");
+        }
+
         // 两边都换成 epoch 毫秒再比：秒级截断会让改密码当秒签发的旧 token 躲过失效判断
         LocalDateTime passwordChangedAt = user.getPasswordChangedAt();
         if (passwordChangedAt != null

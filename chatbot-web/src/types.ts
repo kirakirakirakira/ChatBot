@@ -116,6 +116,11 @@ export interface CurrentUser {
   roleLabel: string
   /** 该用户的系统提示词（人设）；没设过为 null。管理员的用户列表里恒为 null。 */
   systemPrompt?: string | null
+  /**
+   * 管理员重置过密码、本人还没改：前端据此强制弹改密框。
+   * 可选而不是必填：localStorage 里升级前存下的旧登录态没有这个字段，读出来是 undefined（= 不强制）。
+   */
+  mustChangePassword?: boolean
   createdAt: string
 }
 

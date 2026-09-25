@@ -9,6 +9,8 @@ import jakarta.persistence.PrePersist;
 import jakarta.persistence.Table;
 import jakarta.persistence.UniqueConstraint;
 
+import com.chatbot.chatbot.auth.UserStatus;
+
 import java.time.LocalDateTime;
 
 /**
@@ -56,6 +58,25 @@ public class User {
      */
     @Column(name = "system_prompt", columnDefinition = "TEXT")
     private String systemPrompt;
+
+    /**
+     * 账号状态，取值见 auth.UserStatus：0=启用，1=禁用。
+     * 初值写在 Java 侧而不是只靠列 DEFAULT：Hibernate 插入时会把 null 显式写进 SQL，
+     * 只靠数据库 DEFAULT 兜不住 NOT NULL，所以任何 new User() 的路径都得自带初值。
+     */
+    @Column(nullable = false, columnDefinition = "int not null default 0")
+    private Integer status = UserStatus.ENABLED;
+
+    /** 最近一次登录成功的时间；从没登录过为 NULL。管理界面「最近登录」列的数据源。 */
+    @Column(name = "last_login_at")
+    private LocalDateTime lastLoginAt;
+
+    /**
+     * 管理员重置过密码、本人还没改：登录 / /me 响应里带出去，前端据此强制弹改密框。
+     * 本人改密成功（PUT /users/me/password）后清回 false。
+     */
+    @Column(name = "must_change_password", nullable = false, columnDefinition = "tinyint(1) not null default 0")
+    private Boolean mustChangePassword = Boolean.FALSE;
 
     @PrePersist
     void onCreate() {
@@ -108,5 +129,29 @@ public class User {
 
     public void setSystemPrompt(String systemPrompt) {
         this.systemPrompt = systemPrompt;
+    }
+
+    public Integer getStatus() {
+        return status;
+    }
+
+    public void setStatus(Integer status) {
+        this.status = status;
+    }
+
+    public LocalDateTime getLastLoginAt() {
+        return lastLoginAt;
+    }
+
+    public void setLastLoginAt(LocalDateTime lastLoginAt) {
+        this.lastLoginAt = lastLoginAt;
+    }
+
+    public Boolean getMustChangePassword() {
+        return mustChangePassword;
+    }
+
+    public void setMustChangePassword(Boolean mustChangePassword) {
+        this.mustChangePassword = mustChangePassword;
     }
 }

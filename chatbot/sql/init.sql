@@ -12,16 +12,21 @@ USE chatbot;
 -- 用户（登录 + 角色），对应实体 com.chatbot.chatbot.entity.User。
 -- password 存 BCrypt 哈希（固定 60 字符），任何情况下都不存明文。
 -- role 用数字：0=普通用户，1=管理员，取值定义在 com.chatbot.chatbot.auth.Roles；以后加角色不用改表结构。
+-- status 用数字：0=启用，1=禁用，取值定义在 com.chatbot.chatbot.auth.UserStatus；禁用登录 403、已登录的下一个请求 401。
 -- password_changed_at 为 NULL 表示从没改过密码；签发时间（token 的 iat）早于它的登录态一律作废。
 --   这列必须保持 datetime(6)：后端按毫秒比较 iat 和它，精度掉到秒会让改密码那一秒签发的旧 token 躲过失效判断。
+-- last_login_at 为 NULL 表示从没登录过；must_change_password=1 表示管理员重置过密码、本人还没改。
 CREATE TABLE IF NOT EXISTS `sys_user` (
-  `id`                  bigint       NOT NULL AUTO_INCREMENT,
-  `username`            varchar(50)  NOT NULL,
-  `password`            varchar(100) NOT NULL,
-  `role`                int          NOT NULL,
-  `created_at`          datetime(6)  NOT NULL,
-  `password_changed_at` datetime(6)  DEFAULT NULL,
-  `system_prompt`     text         DEFAULT NULL,
+  `id`                   bigint       NOT NULL AUTO_INCREMENT,
+  `username`             varchar(50)  NOT NULL,
+  `password`             varchar(100) NOT NULL,
+  `role`                 int          NOT NULL,
+  `status`               int          NOT NULL DEFAULT 0,
+  `created_at`           datetime(6)  NOT NULL,
+  `password_changed_at`  datetime(6)  DEFAULT NULL,
+  `last_login_at`        datetime(6)  DEFAULT NULL,
+  `must_change_password` tinyint(1)   NOT NULL DEFAULT 0,
+  `system_prompt`        text         DEFAULT NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_sys_user_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -124,6 +129,16 @@ VALUES ('admin', '$2a$10$lN0TQaxdLsYVpQ9wDx5OB.cucn20byv6DYaSmL32FvvtzDZWlEpmi',
 --     ADD COLUMN `prompt_tokens` int DEFAULT NULL AFTER `model`,
 --     ADD COLUMN `completion_tokens` int DEFAULT NULL AFTER `prompt_tokens`,
 --     ADD COLUMN `reasoning_tokens` int DEFAULT NULL AFTER `completion_tokens`;
+--
+-- ===== 已有库升级：2026-09-25「账号状态 / 最近登录 / 强制改密标记」 =====
+-- status 与 must_change_password 是**带 DEFAULT 的 NOT NULL 列**：MySQL 会给已有行填默认值 0，
+--   即「老账号一律视为启用、不强制改密」，不会把任何人锁在门外，也不需要清数据。
+--   （不写 DEFAULT 的话，严格模式下给有数据的表加 NOT NULL 列会直接失败，这是刻意写的。）
+-- last_login_at 可空，没登录过的保持 NULL，不填假时间冒充真实值。
+--   ALTER TABLE `sys_user`
+--     ADD COLUMN `status`               int         NOT NULL DEFAULT 0 AFTER `role`,
+--     ADD COLUMN `last_login_at`        datetime(6) DEFAULT NULL AFTER `password_changed_at`,
+--     ADD COLUMN `must_change_password` tinyint(1)  NOT NULL DEFAULT 0 AFTER `last_login_at`;
 
 -- 备注：
 -- 1) message.role 的取值集合由 Role 枚举决定（Hibernate 按字母序生成）。以后给 Role 加新值（例如 SYSTEM）时，
