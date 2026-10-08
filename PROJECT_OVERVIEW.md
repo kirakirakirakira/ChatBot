@@ -58,7 +58,7 @@
 | 改 LLM 请求体/解析 | `llm/OpenAiCompatibleLlmClient.java` |
 | 改流式编排、取消、自动标题、历史截断 | `service/ChatService.java`（全项目最复杂的一个类） |
 | 改界面配色/圆角/间距 | `chatbot-web/src/assets/main.css`（CSS 变量 + 登录/弹窗共用件），组件内 `<style scoped>` |
-| 改聊天主界面行为 | `chatbot-web/src/views/ChatView.vue`（前端最大的文件，约 586 行） |
+| 改聊天主界面行为 | `chatbot-web/src/views/ChatView.vue`（前端最大的文件，约 1338 行） |
 | 加配置项 | `application.properties` → 对应 `*Properties` record（`AuthProperties` / `LlmProperties`）→ 第五节表格 |
 | 改个人资料 / 个人信息页 | 后端 `controller/UserController.java` + `service/UserService.java` + `dto/UpdateProfileRequest.java`；前端 `views/ProfileView.vue` + `api.ts` 的 `updateMyProfile()` / `fetchMyStats()` / `revokeMySessions()` |
 | 改管理台批量操作 | 后端 `service/AdminUserBatchService.java`（逐条事务的编排）+ `dto/BatchUser*.java`；前端 `views/admin/UsersView.vue` 的勾选与批量条 + `components/admin/BatchResetPasswordDialog.vue` / `BatchResultDialog.vue` |
@@ -140,6 +140,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
         ├── types.ts            # 与后端 DTO/VO 一一对应的类型
         ├── assets/main.css     # 全局 CSS 变量 + 登录/弹窗共用件
         ├── lib/                # markdown.ts：markdown-it + highlight.js + DOMPurify
+        ├── data/               # openingSuggestions.ts：空状态开场建议题库（100 条 / 5 个领域）
         ├── views/              # LoginView、ChatView、ProfileView（个人信息，懒加载）、admin/UsersView（用户管理，懒加载）、ForbiddenView、NotFoundView
         └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、AttachmentThumb、ChangePasswordDialog、SystemPromptDialog、UserMenu、ModuleNav、common/ConfirmDialog、admin/（含批量重置密码 / 批量结果两个弹窗）、icons/（含 IconUser）
 ```
@@ -385,6 +386,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `types.ts` | 小 | 与后端一一对应：`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`、`CurrentUser`↔`UserVO`（含 `mustChangePassword?`）、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`、`Attachment`↔`AttachmentVO`；管理端 `AdminUser`↔`AdminUserVO`、`Page<T>`↔`PageVO`、`UserAdminOptions`、`ResetPasswordResult`、批量 `BatchUserAction` / `BatchUserBody` / `BatchUserItem` / `BatchUserResult`；个人信息 `MyStats`↔`UserProfileStatsVO`、`UpdateProfileBody`；另有纯前端的 `UiMessage` / `AttachmentRef`。`CurrentUser` 的 nickname / email / phone / status / lastLoginAt 都是**可选**：localStorage 里升级前存下的旧登录态没有这些字段。 |
 | `assets/main.css` | 中 | 全局设计变量（暖中性纸感浅色 / 深墨暗色，跟随系统 `prefers-color-scheme`）+ 半径 / 阴影 / 细滚动条 / 选区 / 焦点环 + **登录与四个弹窗共用的基础件**（`.field*` / `.btn-*` / `.alert-*` / `.modal-*`，放全局是因为长得一样、只写一份） |
 | `lib/markdown.ts` | 小 | markdown-it 实例 + 自定义 fence 渲染器（代码块包 `.code-block`、加语言标签和复制按钮、给 `<code>` 补 `hljs` 类——不补 highlight.js 主题的配色就不生效，见 13.2 第 43 条）+ `renderMarkdown()`（渲染后过 DOMPurify）。**安全两道锁**：`html:false` 转义输入里的原始 HTML，DOMPurify 再兜一道；`breaks:true` 让单换行也换行。高亮只注册 highlight.js common 子集，认不出的语言原样输出不报错 |
+| `data/openingSuggestions.ts` | 小 | 空状态开场建议题库：5 个领域各 20 条、共 100 条，导出 `SUGGESTION_GROUPS`（分组数据）、`SUGGESTION_COUNT` 与 `drawSuggestions()`。**洗牌发牌**而不是每次 random：Fisher-Yates 洗完按顺序取，一轮内不重复；牌堆是模块级变量，刷新页面重新洗，对应「每次打开换一批」。补牌用 `while` 循环而不是「不够就重洗再截取」——后者会丢掉牌堆底部剩的几条，让它们出现得更频繁。文件头写明三条选题约束：只写陈述型不写决策型、不碰需要精确外部事实的问题、每条一行放得下（纯中文最长 13 字） |
 | `views/LoginView.vue` | 中 | 登录表单：两团淡品牌色光晕背景 + 居中卡片（圆角 20、入场动画）。成功后 `setSession()` + `router.replace(safeNextPath(next) ?? HOME_PATH)`——用 replace 而不是 push：登录页不该留在历史记录里，否则登录后按后退又回到登录页。失败展示后端文案并清空密码框。 |
 | `views/ChatView.vue` | **大（前端最大文件）** | 聊天主界面：隐形顶栏（会话标题 + `UserMenu` 头像菜单，「用户管理」项 `router.push('/admin/users')`）、居中限宽 760px 的消息列、空状态问候语 + 开场建议 chips、胶囊合成输入框（自动长高、圆形发送/停止、待发送图片缩略图条 + 粘贴/拖拽传图）。详见 4.2 |
 | `components/ConversationSidebar.vue` | 中 | 纯展示组件。props `conversations`/`activeId`/`canCreate`；emits `select(id)`/`create()`/`remove(id)`/`rename(id, title)`。品牌标 + 虚线「新建对话」；列表项 hover 才浮出重命名/删除图标（盖住时间戳，一行宽度有限）；双击标题或点铅笔行内改名 |
@@ -446,7 +448,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | 模型与思考强度 | 输入条两个 `<select>`：模型（`llm.available-models`）+ 思考强度（4096 / 16384 / 131072，对齐百炼 reasoning_effort 的 low / medium 映射，131072 同时是 qwen3.6-flash 的思维链上限）。选择随每条消息下发，存 localStorage | 档位不放进 262144（xhigh）：只有 qwen3.8 系吃得下，qwen3.6-flash 会 400 |
 | 人设 | 顶栏「系统提示词」→ 弹窗编辑 → 保存后覆盖本地 `currentUser`，**下一条消息立即生效**（后端每轮把 `CurrentUser.systemPrompt` 拼成 system 消息） | 人设挂在用户上而不是会话上：同一个人所有会话共用一套人设，换账号就是另一套 |
 | 顶栏收纳 | 会话标题 + 头像菜单（`UserMenu`）；管理入口全在下拉里 | 聊天界面的顶栏应该几乎隐形，主角是消息列 |
-| 空状态 | 问候语 + 三条开场建议 chips，点击填进输入框并聚焦 | 让用户面对空白输入框发呆是最差的开场 |
+| 空状态 | 问候语 + 三条开场建议 chips，点击填进输入框并聚焦。题目从 `data/openingSuggestions.ts` 的 100 条里抽，`setup` 时抽一次、点「新建对话」时重抽 | 让用户面对空白输入框发呆是最差的开场。题库单独成文件：ChatView 已是全项目最大文件，100 条内容塞进去会把真正的逻辑挤没。重抽放在 `newConversation()` 的 `canCreateConversation` 守卫**之后**，只在真的进空状态时才换，免得点了没反应却把正在看的题目换掉 |
 | 联网搜索 | 输入条「联网」pill，随每条消息下发 `enableSearch`；后端在请求体加 `enable_search: true`（仅 true 时下发）。搜索策略固定默认 turbo | 兼容协议拿不到引用来源，做不了引用 UI；qwen3.8 系在兼容协议下不支持 agent 策略，多一个旋钮只会多一种选错 |
 | 传图 | 「图片」按钮（仅 `visionEnabled`）+ 隐藏 `input[type=file]` + textarea 的 `@paste` + 合成框的拖拽。选中即调 `uploadAttachment()`，缩略图条显示「上传中 / 失败」，点 × 移除并 revoke。发送前四道本地校验：张数 ≤4、类型白名单、≤5MB、全部上传成功；带图但模型不支持时横幅拦下，不发请求 | 上传与发送解耦：图片上传可能几百毫秒，攒到点发送那一刻会让按钮明显卡一下。本地校验和后端是同一套规则，后端那道是兜底不是重复 |
 | 纯图片提问 | `send()` 允许 `input` 为空、只要 `pending` 非空；发送按钮的 disabled 条件同步改成「没文字且没图」 | 只发图问「这是什么」是正常用法，不该逼用户凑一句废话 |
@@ -1235,7 +1237,7 @@ npm run preview      # 本地预览 dist/
 
 43. **代码块里的 `hljs` 类必须由 fence 渲染器自己补**：highlight.js 的主题（`github-dark.css`）把文字颜色和背景都挂在 `.hljs` 上，而 markdown-it 只给 `<code>` 加 `language-xx`、不加 `hljs`。少了这个类，主题的 `color` 永远不生效，代码块文字退回继承来的正文色——浅色主题下 `--text` 是近黑的 `#22201b`，底是 `MarkdownContent.vue` 里硬编码的 `#0d1117`，于是「黑底黑字」。两个放大症状的巧合：① 暗色模式看起来完全正常（继承到的正文色本来就是浅的），所以只在浅色用户那里暴露；② 语言被 highlight.js 认出来的代码块只有关键字 / 字符串那类 token 可见，纯文本（模型常写的 ```text）整块不可读——这就是它「有时候」才出现的原因。修在 `lib/markdown.ts` 的 fence 渲染器里（2026-10-08）。
 
-### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条，2026-09-25 追加第 6、7 条）
+### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条，2026-09-25 追加第 6、7 条，2026-10-08 追加第 8 条）
 
 首次全量通读时发现三份 README 有 4 处与代码不符，现已按实际情况改写。**这张表留着是为了说明「为什么这几处的措辞是现在这样」**，不要把它们又改回原来的说法。
 
@@ -1248,6 +1250,7 @@ npm run preview      # 本地预览 dist/
 | 4 | 根 `README.md`、`chatbot/README.md`、`chatbot-web/README.md` | 「multi-user auth」/「多用户」容易被读成「每个用户有自己的会话」 | 三份 README 各加一处显式说明：多用户只指鉴权与用户管理，会话全站共享、可互相读写删除，并指向本文 13.1 |（**该说明已于 2026-09-24 被「会话按用户隔离」取代**：三份 README 又改写了一次，侧边栏现在就是「我的会话」）
 | 6 | `chatbot-web/README.md` 开头第一句 | 「**没有 vue-router**——页面切换就是换根组件」 | 2026-09-25（第十五次变更）已引入 vue-router：`router/{index,routes,guards,paths}.ts` + `layouts/AppShell.vue`，权限闸门在守卫里。该句是引入前的残留，本次改为路由约定说明 |
 | 7 | `chatbot/sql/init.sql` 末尾备注 2) | 「删除用户目前不是功能，所以 `fk_conversation_owner` 用的是默认的 RESTRICT」 | 删号早已是功能（22 号接口，级联删）。RESTRICT 保留是**刻意的**：级联顺序写在应用层（`AdminUserService.delete`），删用户行之前先抓用户名快照进审计表；改成 `ON DELETE CASCADE` 会把这条线索一起级联掉。本次改写备注并说明别顺手改 CASCADE |
+| 8 | 本文〇「检索入口速查」的「改聊天主界面行为」行 | `ChatView.vue`「前端最大的文件，约 586 行」 | 实际已 **1335 行**（同日改完开场建议题库后是 1338 行）。586 是 2026-09-21 首次通读时的量级，此后陆续加入 Markdown 渲染、图片附件、消息分页、空会话回收、重新生成等，行数翻了一倍多。行数不是契约，只是给接手者「这是个大文件、改动前先按模块定位」的量级感；行数随后又随功能变动，本文只保证量级准确 |
 
 > 顺带在根 `README.md` 的 Documentation Map 里补了一节 **For AI agents**，指向 `AGENTS.md`，并说明它被 gitignore、新克隆的仓库里看不到时应直接以本文为准。
 
@@ -1287,5 +1290,7 @@ npm run preview      # 本地预览 dist/
 | 2026-10-08（第二次） | **注入当前日期（修「问天气/日期答错」）**。`ChatService` 新增常量 `CLOCK_ZONE = Asia/Shanghai` 与 `buildSystemPrompt()`：每轮第一条 system 消息固定是「`当前日期：YYYY-MM-DD`（时区 Asia/Shanghai）+ 用户人设」合成的一条（`recentHistory()` 调用）。理由：模型没有时钟，不注入就只能靠训练数据猜、或把检索到的网页里的日期当成今天，表现为同一天里 10月6日 / 10月7日来回漂。时区写死不用 `systemDefault()`（UTC 容器会答成昨天）、不用 `"CST"` 缩写；日期与人设合成一条而不是发两条（部分服务商只认第一条 system）。`MockLlmClient` 的回显标签 `【Mock 人设】` 改成 `【Mock 系统】`。2.2 / 8.1 / 13.2 加第 42 条 与 `chatbot/README.md`「接口」段同步 |
 | 2026-10-08（第三次） | **修浅色主题下代码块「黑底黑字」**。`chatbot-web/src/lib/markdown.ts` 的 fence 渲染器在调 markdown-it 默认渲染前给 code token `attrJoin('class', 'hljs')`。根因：highlight.js 主题（`github-dark.css`）的 `color` / `background` 都挂在 `.hljs` 上，而 markdown-it 只加 `language-xx`，主题因此从未生效——文字色退回继承的正文色（浅色模式 `--text: #22201b`），底是 `MarkdownContent.vue` 里硬编码的 `#0d1117`，两个都近黑；暗色模式正常、认得出的语言也只有部分 token 着色，所以表现为「有时」。13.2 加第 43 条、4.1 文件清单与 `chatbot-web/README.md`「Markdown 渲染」段同步。验证：`npm run type-check` 通过；Chrome 实测（浅色）`pre code` 计算色 `rgb(34,32,27)` → `rgb(201,209,217)`、底恒为 `rgb(13,17,23)`，暗色模式下同样 `rgb(201,209,217)` |
 | 2026-10-08（第四次） | **文档精简 + 中文统一**。三份 README 只留各自的定位（根 README 只讲启动、两个模块 README 只讲契约与取舍），删掉与本文重复的结构性内容并把细节指向本文；根 README 从英文改写为中文，去掉「越权访问一律 404」这类应在本文展开的细节。顺带修本文硬伤：九、安全设计要点与十二、扩展点的编号重排连续（此前存在重复的 18/19 与乱序的 6），删掉九里夹在列表中间的分隔线；5.1 与 10.2 里过时的类名 `AdminUserInitializer` 改回 `SeedUserInitializer`；修复 2.2 controller 表两行错位的单元格分隔，并补回第十四节被空行与分隔线截断的表格。 |
+| 2026-10-08（第五次） | **顺手体检**：〇「检索入口速查」里 `ChatView.vue` 的行数从 586 更正为 1335——586 是 2026-09-21 首次通读时的值，之后 Markdown 渲染、图片附件、消息分页、空会话回收、重新生成等陆续落地，行数已翻倍。纯文档更正，无代码改动；13.3 追加第 8 条 |
+| 2026-10-08（第六次） | **空状态开场建议从写死的三条改为题库随机**。新增 `chatbot-web/src/data/openingSuggestions.ts`：5 个领域（技术 / 科普 / 生活 / 职场 / 人文）各 20 条、共 100 条，导出 `drawSuggestions()` 用**洗牌发牌**抽三条，不是每次 `Math.random()`——100 条里随机抽 3 条反复撞车是常态。`ChatView.vue` 的 `SUGGESTIONS` 常量换成 `ref`，`newConversation()` 里在 `canCreateConversation` 守卫之后重抽（只在真进空状态时才换）。选题刻意只写「讲讲 / 解释一下」型、不写「我该不该…」型（避免模型给医疗 / 法律 / 理财的结论性建议），也不写需要精确外部事实的问题（不联网时会编）。2.1 目录树、4.1 文件清单、4.2 空状态行与 `chatbot-web/README.md` 目录结构段同步。验证：`npm run type-check` 与 `npm run build` 通过；用 Node 直跑题库模块实测「抽满一轮 100 条不重复、连抽 50 轮每轮 3 条互异」 |
 *最后更新：2026-10-08*
 

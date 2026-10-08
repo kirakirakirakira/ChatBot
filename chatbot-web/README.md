@@ -103,6 +103,7 @@ npm run type-check   # vue-tsc --build，只跑类型检查
       router/       index / routes（模块注册表）/ guards（登录与角色闸门）/ paths
       layouts/      AppShell.vue：模块导航 + 内容区外壳
       lib/markdown.ts   markdown-it + highlight.js + DOMPurify
+      data/openingSuggestions.ts  空状态开场建议题库：100 条 / 5 个领域；drawSuggestions() 洗牌发牌抽 3 条
       App.vue       RouterView + 掉登录态回登录页的全局 watch
       main.ts       入口：createApp(App).use(router).mount('#app')
       views/

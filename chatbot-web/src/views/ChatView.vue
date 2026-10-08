@@ -21,6 +21,7 @@ import {
   streamRegenerate,
   uploadAttachment,
 } from '@/api'
+import { drawSuggestions } from '@/data/openingSuggestions'
 
 const conversations = ref<Awaited<ReturnType<typeof listConversations>>>([])
 const activeId = ref<number | null>(null)
@@ -110,12 +111,12 @@ const activeTitle = computed(() => {
   return c ? c.title : '新的对话'
 })
 
-/** 空状态的开场建议：点一下填进输入框，比让用户面对空白输入框发呆友好。 */
-const SUGGESTIONS = [
-  '解释一下 SSE 和 WebSocket 的区别',
-  '帮我写一个 MySQL 分页查询',
-  '用三句话讲清楚什么是向量数据库',
-]
+/**
+ * 空状态的开场建议：点一下填进输入框，比让用户面对空白输入框发呆友好。
+ * 题库在 `data/openingSuggestions.ts`（100 条，5 个领域各 20 条），这里只负责抽 3 条。
+ * 抽法是「洗牌发牌」而不是每次 random：随机抽会在 100 条里反复撞车，发牌保证一轮内不重复。
+ */
+const suggestions = ref<string[]>(drawSuggestions())
 
 const composer = ref<HTMLTextAreaElement | null>(null)
 
@@ -495,6 +496,8 @@ async function newConversation(): Promise<void> {
   if (!canCreateConversation.value) {
     return
   }
+  // 进空状态前重新抽三条：发过消息之后再点「新建对话」，不该还是上一次那几句
+  suggestions.value = drawSuggestions()
   // 列表里已经有一个空对话（比如上次刷新留下的）就直接跳过去，不建第二个。
   // 判据是标题还等于默认值：一旦发过首条消息，后端就把标题改成消息内容了。
   const existingEmpty = conversations.value.find((c) => c.title === DEFAULT_TITLE)
@@ -775,7 +778,7 @@ onBeforeUnmount(() => {
             <h2 class="empty-title">今天想聊点什么？</h2>
             <p class="empty-sub">选一个开场，或直接输入你的问题</p>
             <div class="chips">
-              <button v-for="s in SUGGESTIONS" :key="s" class="chip" type="button" @click="useSuggestion(s)">
+              <button v-for="s in suggestions" :key="s" class="chip" type="button" @click="useSuggestion(s)">
                 {{ s }}
               </button>
             </div>
