@@ -27,7 +27,9 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import tools.jackson.databind.ObjectMapper;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -52,6 +54,16 @@ public class ChatService {
 
     /** 纯图片提问（没有文字）时的会话标题。只要不等于 DEFAULT_TITLE 就不会被后续消息覆盖。 */
     private static final String IMAGE_ONLY_TITLE = "[图片]";
+
+    /**
+     * 注入「当前日期」用的时区，写死 Asia/Shanghai。
+     * <p>
+     * 不用 {@code ZoneId.systemDefault()}：部署到 UTC 容器后它变成 UTC，用户看到的「今天」
+     * 会在每天早上 8 点前答成昨天——正是要用日期注入修掉的那类错。
+     * 也不用 {@code "CST"} 这种缩写：它同时指中国标准时间和美国中部时间，
+     * 跨 JVM / 平台解析结果不一致。
+     */
+    private static final ZoneId CLOCK_ZONE = ZoneId.of("Asia/Shanghai");
 
     /**
      * thinking_budget 的界面/接口上限。取 qwen3.8 系的「最大思维链长度」262144
@@ -398,7 +410,8 @@ public class ChatService {
      */
     /**
      * 取历史拼成模型输入：从最近一条往前累加估算 token，**条数上限和 token 预算谁先满足谁生效**；
-     * 用户设了系统提示词时把它作为 system 消息放在最前面（system 不占历史名额：它是人设不是对话）。
+     * 第一条总是 system：「当前日期」提示 + 用户人设合成一条（缺日期时模型只能猜，理由见
+     * {@link #buildSystemPrompt(String)}；system 不占历史名额：它是人设不是对话）。
      * <p>
      * 一次最多往前扫 {@link #HISTORY_SCAN_LIMIT} 条：再老的上下文对回答的帮助已经很小，
      * 不值得为它把整段历史拉进内存——这正是 token 预算要防的事。
@@ -431,9 +444,7 @@ public class ChatService {
         Map<Long, List<Attachment>> images = imagesOf(picked);
 
         List<LlmMessage> out = new ArrayList<>(picked.size() + 1);
-        if (systemPrompt != null && !systemPrompt.isBlank()) {
-            out.add(LlmMessage.of("system", systemPrompt.strip()));
-        }
+        out.add(LlmMessage.of("system", buildSystemPrompt(systemPrompt)));
         for (Message m : picked) {
             String role = m.getRole().name().toLowerCase();
             List<Attachment> atts = images.get(m.getId());
@@ -442,6 +453,24 @@ public class ChatService {
                     : LlmMessage.multimodal(role, m.getContent(), atts, m.getReasoning()));
         }
         return out;
+    }
+
+    /**
+     * 拼第一条 system 消息：「当前日期」+ 用户人设，**合成一条**。
+     * <p>
+     * 为什么必须注入日期：模型没有时钟。「今天几号」「今天天气」这类问题的答案依赖外部事实，
+     * 不给就只能靠训练数据猜，或在开了联网时把检索到的网页里的日期当成今天。
+     * 表现就是同一天里一会儿答 10月6日、一会儿答 10月7日（采样随机 + 历史污染叠加）。
+     * <p>
+     * 为什么合成一条而不是发两条：部分服务商只认第一条 system 消息，第二条会被忽略。
+     */
+    private String buildSystemPrompt(String systemPrompt) {
+        String dateLine = "当前日期：" + LocalDate.now(CLOCK_ZONE) + "（时区 Asia/Shanghai）。"
+                + "回答涉及时间、天气、新闻、股价等实时信息的问题时，以此日期为准。";
+        if (systemPrompt == null || systemPrompt.isBlank()) {
+            return dateLine;
+        }
+        return dateLine + "\n\n" + systemPrompt.strip();
     }
 
     /**

@@ -183,11 +183,11 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | 文件 | 前缀 | 端点 |
 |---|---|---|
 | `AuthController.java` | `/api/auth` | `POST /login`（`@Valid LoginRequest` → `LoginResponse`；全站唯一免登录接口）、`GET /me`（`CurrentUser` → `UserVO`） |
-| `ConversationController.java` | `/api/conversations` | `POST`（→ 201 + `ConversationVO`）、`GET`（→ `List<ConversationVO>`）、`GET /{id}/messages?before=&limit=`（→ `MessagePageVO`，items 里带附件元信息）、`PUT /{id}/title`（→ `ConversationVO`）、`DELETE /{id}`（→ 204）、`POST /{id}/attachments`（multipart 字段名 `file` → 201 + `AttachmentVO`）。`ChatController` 另有 `POST /{id}/regenerate`（SSE，请求体可省略） |**每个方法都声明 `CurrentUser` 形参**，归属校验在 service 层 |
+| `ConversationController.java` | `/api/conversations` | `POST`（→ 201 + `ConversationVO`）、`GET`（→ `List<ConversationVO>`）、`GET /{id}/messages?before=&limit=`（→ `MessagePageVO`，items 里带附件元信息）、`PUT /{id}/title`（→ `ConversationVO`）、`DELETE /{id}`（→ 204）、`POST /{id}/attachments`（multipart 字段名 `file` → 201 + `AttachmentVO`）。`ChatController` 另有 `POST /{id}/regenerate`（SSE，请求体可省略）；**每个方法都声明 `CurrentUser` 形参**，归属校验在 service 层 |
 | `AttachmentController.java` | `/api/attachments` | `GET /{id}` → 图片字节（`Content-Type` = 存的 mime + `X-Content-Type-Options: nosniff`）。**没有类级 `@RequestMapping`**：只有一个方法、且路径不在 `/api/conversations` 下 |
 | `ChatController.java` | `/api/conversations` | `POST /{id}/chat`，`produces = TEXT_EVENT_STREAM_VALUE`，`@Valid ChatRequest` + `CurrentUser` → `SseEmitter`。**CurrentUser 必须在进 service 之前解析**：生成跑在虚拟线程上，那里拿不到 request attribute，补不了归属校验 |
 | `LlmController.java` | `/api/llm` | `GET /options`（→ `LlmOptionsVO`）。默认受保护：模型清单不敏感，但没必要在未登录时暴露部署用了哪些模型 |
-| `UserController.java` | `/api/users` 只剩「管自己」：`PUT /me/password`（→ 新 `LoginResponse`）、`PUT /me/system-prompt`（→ `UserVO`，**不换发 token**）、`PUT /me/profile`（昵称/邮箱/手机号 → `UserVO`，同样不换发 token）、`GET /me/stats`（自己的会话/消息/附件计数）、`POST /me/revoke`（204，作废自己**全部**登录态、含当前这个）。「管别人」的全部在 `AdminUserController`。原来的 `GET`（管理员列表）已删：唯一调用方是只读弹窗，被 `/admin/users` 页面取代。 |
+| `UserController.java` | `/api/users` | 只剩「管自己」：`PUT /me/password`（→ 新 `LoginResponse`）、`PUT /me/system-prompt`（→ `UserVO`，**不换发 token**）、`PUT /me/profile`（昵称/邮箱/手机号 → `UserVO`，同样不换发 token）、`GET /me/stats`（自己的会话/消息/附件计数）、`POST /me/revoke`（204，作废自己**全部**登录态、含当前这个）。「管别人」的全部在 `AdminUserController`。原来的 `GET`（管理员列表）已删：唯一调用方是只读弹窗，被 `/admin/users` 页面取代。 |
 
 > 注意：会话类控制器（`ConversationController` / `ChatController` / `AttachmentController`）**每个方法都声明 `CurrentUser` 形参**，归属校验统一在 service 层，查不到或不是自己的一律 404（理由见第九节）。2026-09-24 之前的旧文档写「没有 `CurrentUser` 形参」，那是会话隔离落地前的状态，已修正（见 13.3）。
 
@@ -252,7 +252,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 
 | 文件 | 职责 |
 |---|---|
-| `ChatService.java` | **全项目最复杂的类**，SSE 流式对话编排。详见第八节 8.1。关键成员：`SSE_TIMEOUT_MARGIN_MS = 30_000`、`DEFAULT_TITLE = "新的对话"`、`TITLE_MAX_LENGTH = 30`、`MAX_THINKING_BUDGET = 262144`（qwen3.8 系最大思维链长度）、`executor = Executors.newVirtualThreadPerTaskExecutor()`、`sseTimeoutMs = requestTimeoutSeconds*1000 + 30000`。`buildOptions()` 统一做模型白名单 + 思考预算校验（思考关着时预算丢弃）；`recentHistory()` 把存库思考随历史回传（preserve_thinking）。内部类 `SurrogateBuffer`、`StreamAbortedException` |
+| `ChatService.java` | **全项目最复杂的类**，SSE 流式对话编排。详见第八节 8.1。关键成员：`SSE_TIMEOUT_MARGIN_MS = 30_000`、`DEFAULT_TITLE = "新的对话"`、`TITLE_MAX_LENGTH = 30`、`MAX_THINKING_BUDGET = 262144`（qwen3.8 系最大思维链长度）、`executor = Executors.newVirtualThreadPerTaskExecutor()`、`sseTimeoutMs = requestTimeoutSeconds*1000 + 30000`、`CLOCK_ZONE = Asia/Shanghai`（日期注入的时区）。`buildOptions()` 统一做模型白名单 + 思考预算校验（思考关着时预算丢弃）；`recentHistory()` 把存库思考随历史回传（preserve_thinking），并经 `buildSystemPrompt()` 把「当前日期 + 人设」合成第一条 system 消息。内部类 `SurrogateBuffer`、`StreamAbortedException` |
 | `ConversationService.java` | 会话 CRUD，**每个公开方法都接 `CurrentUser`**：`create(user)`、`list(user)`、`messages(id, user, before, limit)`（游标分页）、`delete(id, user)`、`requireOwned(id, user)`（404 口径）、`rename(id, user, request)`、`locateRegenerateTarget(id)`（只定位不删除，返回 `DroppedReply(prompt, model, assistantMessageId)`；最后一条不是助手消息就 400）+ `deleteAssistantMessage(id)`（校验都过了再删：模型不支持图片时必须 400 在删除之前，否则用户连旧回答都丢了） |
 | `AttachmentService.java` | 图片附件的上传 / 校验 / 挂载 / 读取。`ALLOWED_MIME` 5 种位图（**刻意不含 SVG**：能带脚本）、`MAX_BYTES = 5MB`、`MAX_PER_MESSAGE = 4`。`upload()` 先传后发（上传不等发送）；`validateForConversation()` 一次挡掉「不存在 / 是别人的 / 已被占用」三种情况（都 400）；`requireOwned()` 读字节前查归属（404）。**只依赖 `ConversationService`，不被它反向依赖**，否则构造器循环 |
 | `UserService.java` | `login()`（`@Transactional`：`touchLastLogin()` 是 `@Modifying`；先验密码再判禁用 → 403）、`me()`、`changePassword()`、`updateSystemPrompt()`、`updateProfile()`（全空白存 NULL；**不换发 token**：改资料不是安全事件）、`stats()`（三个 count，只读事务）、`revokeOwnSessions()`（推 `passwordChangedAt`，本人所有 token 含当前这个立刻失效）。目标 id 一律只来自 token。构造时预算 `dummyHash` 防时序攻击。原来的 `list()` 已删。 |
@@ -268,7 +268,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | 文件 | 职责 |
 |---|---|
 | `resources/application.properties` | 主配置，全部可调项写成 `${环境变量:仓库内默认值}`。逐项说明见第五节。 |
-| `resources/application-local.properties` | 本地真实密钥（DB 密码 + `llm.api-key`）。**已被 `.gitignore` 忽略**，靠启动参数 `--spring.profiles.active=local` 生效。 |
+| `resources/application-local.properties` | 本地真实密钥（DB 密码；**LLM key 已改为走环境变量 `DASHSCOPE_API_KEY`**）。**已被 `.gitignore` 忽略**，靠启动参数 `--spring.profiles.active=local` 生效。 |
 | `sql/init.sql` | 建库 + 建 4 张表（含 `attachment`）+ `INSERT IGNORE` 种子**超级管理员**（`admin` / BCrypt 哈希 / role=2）+ 四个测试账号（role 2/1/0/3，密码统一 test123456 的哈希）。全部 `IF NOT EXISTS`，**可重复执行**。结构与 `ddl-auto=update` 的结果一致；「已有库升级」段按日期记录每次表结构迁移的 SQL（2026-09-25 新增「个人资料三列」与「测试账号 + 种子自愈」两段）；末尾备注了两条手工维护项（`Role` 枚举扩值、删号级联顺序为什么留在应用层）。 |
 | `src/test/.../ChatbotApplicationTests.java` | 只有一个空的 `contextLoads()`，`@SpringBootTest`。**项目没有其他自动化测试**，需要真 MySQL 才能跑起来。 |
 
@@ -384,7 +384,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `api.ts` | 中 | **聊天与登录的接口清单**：只描述「有哪些接口、请求体和响应长什么样」，传输层在 `api/client.ts`。新增别的平级模块另开 `src/api/<模块>.ts`（见 `api/userAdmin.ts`）。导出：`login`、`fetchMe`、`changePassword`、`updateSystemPrompt`、`updateMyProfile` / `fetchMyStats` / `revokeMySessions`（个人信息页三件套）、`createConversation`、`listConversations`、`getMessages`、`deleteConversation`、`renameConversation`、`fetchLlmOptions`、`uploadAttachment`、`fetchAttachmentUrl`、`streamChat` / `streamRegenerate`（共用 `consumeSse()`）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
 | `types.ts` | 小 | 与后端一一对应：`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`、`CurrentUser`↔`UserVO`（含 `mustChangePassword?`）、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`、`Attachment`↔`AttachmentVO`；管理端 `AdminUser`↔`AdminUserVO`、`Page<T>`↔`PageVO`、`UserAdminOptions`、`ResetPasswordResult`、批量 `BatchUserAction` / `BatchUserBody` / `BatchUserItem` / `BatchUserResult`；个人信息 `MyStats`↔`UserProfileStatsVO`、`UpdateProfileBody`；另有纯前端的 `UiMessage` / `AttachmentRef`。`CurrentUser` 的 nickname / email / phone / status / lastLoginAt 都是**可选**：localStorage 里升级前存下的旧登录态没有这些字段。 |
 | `assets/main.css` | 中 | 全局设计变量（暖中性纸感浅色 / 深墨暗色，跟随系统 `prefers-color-scheme`）+ 半径 / 阴影 / 细滚动条 / 选区 / 焦点环 + **登录与四个弹窗共用的基础件**（`.field*` / `.btn-*` / `.alert-*` / `.modal-*`，放全局是因为长得一样、只写一份） |
-| `lib/markdown.ts` | 小 | markdown-it 实例 + 自定义 fence 渲染器（代码块包 `.code-block`、加语言标签和复制按钮）+ `renderMarkdown()`（渲染后过 DOMPurify）。**安全两道锁**：`html:false` 转义输入里的原始 HTML，DOMPurify 再兜一道；`breaks:true` 让单换行也换行。高亮只注册 highlight.js common 子集，认不出的语言原样输出不报错 |
+| `lib/markdown.ts` | 小 | markdown-it 实例 + 自定义 fence 渲染器（代码块包 `.code-block`、加语言标签和复制按钮、给 `<code>` 补 `hljs` 类——不补 highlight.js 主题的配色就不生效，见 13.2 第 43 条）+ `renderMarkdown()`（渲染后过 DOMPurify）。**安全两道锁**：`html:false` 转义输入里的原始 HTML，DOMPurify 再兜一道；`breaks:true` 让单换行也换行。高亮只注册 highlight.js common 子集，认不出的语言原样输出不报错 |
 | `views/LoginView.vue` | 中 | 登录表单：两团淡品牌色光晕背景 + 居中卡片（圆角 20、入场动画）。成功后 `setSession()` + `router.replace(safeNextPath(next) ?? HOME_PATH)`——用 replace 而不是 push：登录页不该留在历史记录里，否则登录后按后退又回到登录页。失败展示后端文案并清空密码框。 |
 | `views/ChatView.vue` | **大（前端最大文件）** | 聊天主界面：隐形顶栏（会话标题 + `UserMenu` 头像菜单，「用户管理」项 `router.push('/admin/users')`）、居中限宽 760px 的消息列、空状态问候语 + 开场建议 chips、胶囊合成输入框（自动长高、圆形发送/停止、待发送图片缩略图条 + 粘贴/拖拽传图）。详见 4.2 |
 | `components/ConversationSidebar.vue` | 中 | 纯展示组件。props `conversations`/`activeId`/`canCreate`；emits `select(id)`/`create()`/`remove(id)`/`rename(id, title)`。品牌标 + 虚线「新建对话」；列表项 hover 才浮出重命名/删除图标（盖住时间戳，一行宽度有限）；双击标题或点铅笔行内改名 |
@@ -522,7 +522,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `server.port` | `8089` | — | 改了要同步 `chatbot-web/vite.config.ts` 的代理 target |
 | `auth.token-secret` | dev 占位值 | `AUTH_TOKEN_SECRET` | **少于 32 字符后端拒绝启动**（`TokenService` 构造函数抛 `IllegalStateException`）。生产必须覆盖 |
 | `auth.token-ttl-hours` | `12` | `AUTH_TOKEN_TTL_HOURS` | 过期返回 401，前端自动弹回登录页 |
-| `auth.default-admin-username` | `admin` | `AUTH_ADMIN_USERNAME` | 仅 `sys_user` 为空表时由 `AdminUserInitializer` 兜底创建，等价 `init.sql` 的 `INSERT IGNORE` |
+| `auth.default-admin-username` | `admin` | `AUTH_ADMIN_USERNAME` | 仅 `sys_user` 为空表时由 `SeedUserInitializer` 兜底创建，等价 `init.sql` 的 `INSERT IGNORE` |
 | `auth.default-admin-password` | `admin` | `AUTH_ADMIN_PASSWORD` | 同上，入库前做 BCrypt |
 | `auth.seed-test-users` | `true` | `AUTH_SEED_TEST_USERS` | 是否补齐每个角色一个测试账号（`test_super` / `test_admin` / `test_user` / `test_guest`）。只在用户名不存在时创建，不覆盖已有账号。**生产环境关掉** |
 | `auth.test-user-password` | `test123456` | `AUTH_TEST_USER_PASSWORD` | 测试账号的统一密码，入库前 BCrypt。长度不在 6~64 内时 `SeedUserInitializer` **启动直接抛异常**，不静默跳过 |
@@ -535,7 +535,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `spring.jpa.show-sql` | `false` | `SHOW_SQL` | 调试 SQL 时 `SHOW_SQL=true` 启动 |
 | `spring.jpa.open-in-view` | `false` | — | 关掉 OSIV，避免懒加载在视图层触发 |
 | `llm.base-url` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | — | 任何 OpenAI 兼容接口都能直连（改这里 + `llm.model` 即可换服务商） |
-| `llm.api-key` | 空 | `LLM_API_KEY` | **留空自动走 `MockLlmClient`** |
+| `llm.api-key` | 空 | `DASHSCOPE_API_KEY`（兼容 `LLM_API_KEY`） | **留空自动走 `MockLlmClient`**。占位符写成 `${DASHSCOPE_API_KEY:${LLM_API_KEY:}}`：新名优先，两个都没配才是空 |
 | `llm.model` | `qwen3.6-flash` | — | **只是默认值**：请求体带 `model` 时以请求为准（须落在白名单里） |
 | `llm.available-models` | `qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max` | `LLM_AVAILABLE_MODELS` | 界面可选模型白名单（逗号分隔）。请求里的 `model` 不在里面就 400 并把清单写进错误文案；加模型改配置即可，不用改代码发版 |
 | `llm.enable-thinking` | `true` | `LLM_ENABLE_THINKING` | 映射为请求体顶层 `enable_thinking`（百炼/Qwen 系参数）。**服务商不认识该字段时把这一行整行注释掉**，后端就不下发。取舍见 `chatbot/README.md` |
@@ -548,7 +548,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 
 > `LLM_REQUEST_TIMEOUT` 和 `LLM_MAX_HISTORY` 是 properties 里**显式写死**的占位符名，不是 Spring relaxed binding 推出来的 `LLM_REQUEST_TIMEOUT_SECONDS` / `LLM_MAX_HISTORY_MESSAGES`。用错名字不会报错，只会静默走默认值。
 
-`application-local.properties` 当前只有两项（仅本地，不入库）：`spring.datasource.password` 与 `llm.api-key`。**该文件里现在存着一个真实的百炼 API Key**，注意不要复制进任何会提交的文件或对外输出。
+`application-local.properties` 当前只有 `spring.datasource.password` 一项（仅本地，不入库）；`llm.api-key` 已改为从环境变量 `DASHSCOPE_API_KEY`（兼容 `LLM_API_KEY`）读取，文件里不再存真实 key。**注意 profile 专属文件的优先级高于 `application.properties`**：只要 `application-local.properties` 里还留着字面量 `llm.api-key=`，环境变量就永远不生效（静默走那个值）；改完要重启后端，`LlmClient` Bean 启动时定型。
 
 ### 5.2 前端配置
 
@@ -665,7 +665,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 两条等价路径，任选其一：
 
 1. 执行 `chatbot/sql/init.sql`：建库（`utf8mb4` / `utf8mb4_unicode_ci`）+ 建 3 张表 + `INSERT IGNORE` 种子管理员 `admin`（`admin` 的 BCrypt cost=10 哈希，role=1）。全部 `IF NOT EXISTS` / `INSERT IGNORE`，**脚本可重复执行**，也不会把改过的密码覆盖回 `admin`。
-2. 直接启动后端：`ddl-auto=update` 自动建表，`AdminUserInitializer` 在 `sys_user` 为空时自动建默认管理员。
+2. 直接启动后端：`ddl-auto=update` 自动建表，`SeedUserInitializer` 在 `sys_user` 为空时自动建默认管理员。
 
 **同步规则**：表结构的唯一事实源是 `entity/` 下的三个实体类。改实体后必须同步 `sql/init.sql`——`ddl-auto=update` 只补新表新列，**不会修改或删除已有列**，两边不一致时脚本会悄悄过期。 另外 `init.sql` 末尾有一段「已有库升级」注释（2026-09-24 会话归属那次留下的迁移 SQL）：给**已经有数据的旧库**手工执行 ALTER 用。以后再做破坏性结构变更，请往那段下面追加，别只改 CREATE TABLE——`IF NOT EXISTS` 对旧库是空操作。
 
@@ -885,7 +885,7 @@ POST /api/conversations/{id}/chat  {message, enableThinking?, attachmentIds?}
       5. saveMessage(conversation, USER, text) + linkToMessage(ids, messageId)  // 附件挂到这条用户消息上
       6. recentHistory(id, user.systemPrompt)       // 从新往旧累加估算 token：条数上限与 token 预算谁先满足谁生效
                                                     //   思考也计入预算（preserve_thinking 会回传）；至少保留最新一条
-                                                    //   人设非空时作为 system 消息放最前面，不占历史名额
+                                                    //   第一条固定是 system：「当前日期 + 人设」合成一条，不占历史名额
                                                     //   带附件的消息在这里变成多模态 content 数组（图在前、文在后）
       7. requireVisionSupport(history, model)       // 历史窗口里有旧图而模型不支持 → 400（消息已落库，换模型重生成即可恢复）
       8. new SseEmitter(sseTimeoutMs)               // = requestTimeoutSeconds*1000 + 30000
@@ -912,6 +912,8 @@ POST /api/conversations/{id}/chat  {message, enableThinking?, attachmentIds?}
 ```
 
 **取消语义**：前端 abort（点停止 / 关页面 / 切会话 / 退出登录 / 组件卸载）、SSE 超时、客户端断网，都会置 `cancelled`。正在跑的生成在**下一个增量**立刻停下——`onReasoning` 和 `onToken` 里都检查，只在回答流里检查的话，思考阶段点「停止」要等到回答开始才生效。`send()` 失败也转成 `StreamAbortedException`。
+
+**日期注入（`buildSystemPrompt`）**：每轮拼给模型的第一条 system 消息固定是「`当前日期：YYYY-MM-DD`（时区 `Asia/Shanghai`）+ 用户人设」**合成的一条**。理由：模型没有时钟，「今天几号」「今天天气」这类问题的答案依赖外部事实，不注入就只能靠训练数据猜、或在开了联网时把检索到的网页里的日期当成今天——表现为同一天里一会儿答 10月6日、一会儿答 10月7日。时区**写死 `Asia/Shanghai`**：不用 `ZoneId.systemDefault()`（部署到 UTC 容器后每天早 8 点前答成昨天），也不用 `"CST"` 缩写（它同时指中国标准时间和美国中部时间，跨 JVM / 平台解析不一致）。日期与**人设合成一条**而不是发两条：部分服务商只认第一条 system 消息。
 
 **SurrogateBuffer 存在的理由**：emoji 等非 BMP 字符在 UTF-16 里占 2 个 char，正好被切成两段增量时，单个 char 编不出 UTF-8，Jackson 会写成 `?`，前端看到乱码。`feed()` 检测到末尾是高位代理字符就把它扣下来留到下一次。流结束时若仍有扣留字符，只记一条 debug 日志并跳过推送。
 
@@ -1072,18 +1074,17 @@ send():
 15. **会话归属校验**：会话接口的控制器都接 `CurrentUser`，service 层按 `(id, owner_id)` 查；不存在**或属于别人**一律 404 而不是 403——403 会把「这个 id 确实存在」泄露出去，而 id 是自增的，等于让人枚举出全站有多少会话。管理员**没有**跨用户查看 / 删除的特权，真要做跨用户管理得单独设计（审计、转交、级联删），别指望在现有接口上加个角色判断就完事。
 
 16. **CORS 白名单来自配置**：`cors.allowed-origins` 默认只有 Vite 的 5173，对外部署用 `CORS_ALLOWED_ORIGINS` 覆盖；留空启动失败而不是退化成 `*`。非白名单源的跨域请求拿 403 且不带 `Access-Control-Allow-Origin` 头，同源请求和服务器间调用（不带 Origin 头）不受影响。
-17. **人设隐私**：`system_prompt` 只在用户自己的 `/me`、登录响应和改人设响应里出现；管理员视角的 `AdminUserVO` 连这个字段都没有——「能列用户」不等于「能看别人的设置」。改人设**不换发 token**（与改密码刻意不同）：它不是安全事件，不该踢掉自己的其他设备。 |
-19. **管理端自我保护 = 层级模型**：`Roles.rank()` 超级管理员 3 > 管理员 2 > 普通用户 1 > 访客 0，所有写操作要求「目标层级严格低于操作者」，另加「不能对自己下手」「不能指派不低于自己的角色」「最后一个启用的管理者 / 超级管理员动不得」三道闸，一律 400 中文文案。**自己的角色在界面上是锁死的**（控件 disabled + 纯文本标签），不是「看起来能点、点了才报错」。层级与 code 解耦：code 是落库值（0/1 有历史含义不能改），rank 才是权限顺序。
-20. **随机密码只回显一次**：`ResetPasswordResult.generatedPassword` 只在那一次响应里出现，后端不留明文（库里只有 BCrypt 哈希）；前端弹窗关掉就再也看不到，界面上明确写「只显示这一次」。
-21. **删号不做软删除是刻意的**：`owner_id` 是 NOT NULL + RESTRICT，软删除就得给所有会话找一个「已注销」替身账号，反而造出一个谁都能看见的幽灵用户。「谁动过这个账号」的留痕由 `admin_audit_log` 承担（见 8.6），不靠留着登录行。
-22. **审计与业务同事务、且只记成功**：`AdminAuditService.record()` 必须在调用方自己的 `@Transactional` 里调——操作回滚则审计一起回滚，否则会出现「操作失败了却有一条留痕」的假记录，比没有审计更误导。审计表不建外键、应用层不开删除入口（repository 里没有 update/delete 方法），清历史只能走运维 SQL。
-23. **种子账号必须是超级管理员**：层级规则下管理员管不到管理员，若种子只是管理员，系统将永远无法创建 / 提升出超级管理员（没人有指派权限）。`SeedUserInitializer` 与 `init.sql` 的种子都是 role=2；老库（种子 role=1）有两条升级路径：手工执行 `init.sql`「已有库升级：角色层级」段里那条 UPDATE，或者直接启动新版后端让**超管自愈**把它提回来（触发条件：系统里一个启用的超管都没有）。
-24. **批量不绕过任何单条规则**：`POST /api/admin/users/batch` 只是把单条方法在一批 id 上跑一遍，层级 / 不能对自己下手 / 最后一个启用的管理者三道闸逐条生效；「批量」不是特权通道，想靠批量改掉单条接口改不动的人是不可能的。
-25. **个人信息页改不了登录名与角色**：`UpdateProfileRequest` 只有 nickname / email / phone 三个字段。username 是审计快照里「谁干的」的锚点，允许本人随手改名等于允许抹线索；role / status 是管理端写口径，放进「改自己的资料」就是现成的提权洞。
-18. **禁用立刻生效，且不留枚举口子**：AuthInterceptor 每请求回表，所以禁用后目标账号的**下一个请求**就 401，不用等 token 自然过期；登录接口对禁用账号返回 403，但**放在密码校验之后**——顺序反了的话，「这个用户名存在但被禁用了」就成了一个可枚举的信息。已知限制：正在跑的 SSE 不会被打断（拦截器只在请求开始时执行）。 |
----
-18. **附件字节走鉴权接口而不是公开 URL**：`GET /api/attachments/{id}` 默认要登录（不在 `PUBLIC_PATHS`），归属校验与会话同一口径（404）；前端 fetch 成 blob 再转 objectURL。**刻意不做 `?token=` 兜底**（长期凭证进 URL / 日志 / 浏览器历史），也不把 base64 塞进消息 JSON（响应体膨胀几十倍）。出网 `Content-Type` 只能取白名单 5 种图片 MIME + `nosniff`，改名上传的 HTML 不会被当页面执行；**白名单刻意不含 SVG**（能带脚本）。
-19. **上传校验两道**：`spring.servlet.multipart.max-file-size`（413）与 `AttachmentService` 的 5MB / MIME / 张数校验（400 中文文案）是同一个数的两处表达，改一处必须改另一处；前端还有一道同样的本地校验，但后端那道才是兜底。
+17. **人设隐私**：`system_prompt` 只在用户自己的 `/me`、登录响应和改人设响应里出现；管理员视角的 `AdminUserVO` 连这个字段都没有——「能列用户」不等于「能看别人的设置」。改人设**不换发 token**（与改密码刻意不同）：它不是安全事件，不该踢掉自己的其他设备。
+18. **管理端自我保护 = 层级模型**：`Roles.rank()` 超级管理员 3 > 管理员 2 > 普通用户 1 > 访客 0，所有写操作要求「目标层级严格低于操作者」，另加「不能对自己下手」「不能指派不低于自己的角色」「最后一个启用的管理者 / 超级管理员动不得」三道闸，一律 400 中文文案。**自己的角色在界面上是锁死的**（控件 disabled + 纯文本标签），不是「看起来能点、点了才报错」。层级与 code 解耦：code 是落库值（0/1 有历史含义不能改），rank 才是权限顺序。
+19. **随机密码只回显一次**：`ResetPasswordResult.generatedPassword` 只在那一次响应里出现，后端不留明文（库里只有 BCrypt 哈希）；前端弹窗关掉就再也看不到，界面上明确写「只显示这一次」。
+20. **删号不做软删除是刻意的**：`owner_id` 是 NOT NULL + RESTRICT，软删除就得给所有会话找一个「已注销」替身账号，反而造出一个谁都能看见的幽灵用户。「谁动过这个账号」的留痕由 `admin_audit_log` 承担（见 8.6），不靠留着登录行。
+21. **审计与业务同事务、且只记成功**：`AdminAuditService.record()` 必须在调用方自己的 `@Transactional` 里调——操作回滚则审计一起回滚，否则会出现「操作失败了却有一条留痕」的假记录，比没有审计更误导。审计表不建外键、应用层不开删除入口（repository 里没有 update/delete 方法），清历史只能走运维 SQL。
+22. **种子账号必须是超级管理员**：层级规则下管理员管不到管理员，若种子只是管理员，系统将永远无法创建 / 提升出超级管理员（没人有指派权限）。`SeedUserInitializer` 与 `init.sql` 的种子都是 role=2；老库（种子 role=1）有两条升级路径：手工执行 `init.sql`「已有库升级：角色层级」段里那条 UPDATE，或者直接启动新版后端让**超管自愈**把它提回来（触发条件：系统里一个启用的超管都没有）。
+23. **批量不绕过任何单条规则**：`POST /api/admin/users/batch` 只是把单条方法在一批 id 上跑一遍，层级 / 不能对自己下手 / 最后一个启用的管理者三道闸逐条生效；「批量」不是特权通道，想靠批量改掉单条接口改不动的人是不可能的。
+24. **个人信息页改不了登录名与角色**：`UpdateProfileRequest` 只有 nickname / email / phone 三个字段。username 是审计快照里「谁干的」的锚点，允许本人随手改名等于允许抹线索；role / status 是管理端写口径，放进「改自己的资料」就是现成的提权洞。
+25. **禁用立刻生效，且不留枚举口子**：AuthInterceptor 每请求回表，所以禁用后目标账号的**下一个请求**就 401，不用等 token 自然过期；登录接口对禁用账号返回 403，但**放在密码校验之后**——顺序反了的话，「这个用户名存在但被禁用了」就成了一个可枚举的信息。已知限制：正在跑的 SSE 不会被打断（拦截器只在请求开始时执行）。
+26. **附件字节走鉴权接口而不是公开 URL**：`GET /api/attachments/{id}` 默认要登录（不在 `PUBLIC_PATHS`），归属校验与会话同一口径（404）；前端 fetch 成 blob 再转 objectURL。**刻意不做 `?token=` 兜底**（长期凭证进 URL / 日志 / 浏览器历史），也不把 base64 塞进消息 JSON（响应体膨胀几十倍）。出网 `Content-Type` 只能取白名单 5 种图片 MIME + `nosniff`，改名上传的 HTML 不会被当页面执行；**白名单刻意不含 SVG**（能带脚本）。
+27. **上传校验两道**：`spring.servlet.multipart.max-file-size`（413）与 `AttachmentService` 的 5MB / MIME / 张数校验（400 中文文案）是同一个数的两处表达，改一处必须改另一处；前端还有一道同样的本地校验，但后端那道才是兜底。
 
 ## 十、开发指南
 
@@ -1117,7 +1118,7 @@ npm run preview      # 本地预览 dist/
 ### 10.2 首次跑起来的顺序
 
 1. MySQL 建库：执行 `chatbot/sql/init.sql`（或直接启动后端靠 `ddl-auto=update` + `SeedUserInitializer`，它会连测试账号一起补齐）。
-2. 配密钥：把 DB 密码和 `llm.api-key` 写进 `chatbot/src/main/resources/application-local.properties`（不入库）。**不配 key 也能跑**，走 `MockLlmClient`。
+2. 配密钥：DB 密码写进 `chatbot/src/main/resources/application-local.properties`（不入库）；百炼 API Key 用环境变量 `DASHSCOPE_API_KEY`（兼容 `LLM_API_KEY`）。**不配 key 也能跑**，走 `MockLlmClient`。
 3. 起后端（带 `--spring.profiles.active=local`），起前端 `npm run dev`。
 4. 用 `admin` / `admin` 登录，**登录后立刻改密码**。
 
@@ -1166,10 +1167,10 @@ npm run preview      # 本地预览 dist/
 1. **换 LLM 服务商**：改 `llm.base-url` + `llm.model` + `llm.api-key` 即可，任何 OpenAI 兼容接口都能直连。服务商不认识 `enable_thinking` 时，把 `application.properties` 里那一行整行注释掉（`LlmProperties.enableThinking` 变 null → 请求体不下发该字段）。要支持非兼容协议，新写一个 `LlmClient` 实现并在 `LlmConfig` 里加分支。
 2. **新增角色 / 细粒度权限**：在 `Roles` 加常量，新增注解（如 `@RequireOperator`），在 `AuthInterceptor.requiresAdmin()` 旁边加对应判断。`sys_user.role` 是 int，**不用改列类型**。
 3. **新增接口**：`controller/` 下加方法即可，默认要登录；需要当前用户就在形参里声明 `CurrentUser`。**管理端接口挂 `/api/admin/**` 并把 `@RequireAdmin` 打在类上**（该控制器下不存在普通用户该能调的方法时，类级注解不给漏打留机会）；`/api/users/**` 只放「管自己」的接口。
-6. **新增管理台模块**：后端 `Admin<模块>Controller/Service` + 前端 `views/<模块>/` + `src/api/<模块>.ts` + `routes.ts` 一条带 `requiresAdmin` 的记录；下拉字典照 `/options` 模式做（中文 label 后端给，前端不写死枚举值）。
-4. **新增前端页面 / 平级功能模块**：`views/` 下加组件 + `router/routes.ts` 里加一条路由记录。带 `meta.moduleId` / `title` / `icon` / `order` 就会自动出现在左侧模块导航条上，带 `meta.requiresAdmin` 守卫就会自动拦成 `/403`——**ModuleNav 与 guards 都不用改**。管理台类视图用 `() => import()` 懒加载，聊天这类落地页保持静态 import。
-5. **`chatbot/README.md` 末尾的「后续待加」**：见该文件，已完成的条目会随变更删掉。
-6. **多模态往哪扩**：图片输入已通（`image_url` + base64）。下一步自然是把 `data` 换成对象存储 key（多实例部署的前提）、给孤儿附件加定时清理、或按 `usage` 回填做动态 token 预算（把图片 token 也算进去）。
+4. **新增管理台模块**：后端 `Admin<模块>Controller/Service` + 前端 `views/<模块>/` + `src/api/<模块>.ts` + `routes.ts` 一条带 `requiresAdmin` 的记录；下拉字典照 `/options` 模式做（中文 label 后端给，前端不写死枚举值）。
+5. **新增前端页面 / 平级功能模块**：`views/` 下加组件 + `router/routes.ts` 里加一条路由记录。带 `meta.moduleId` / `title` / `icon` / `order` 就会自动出现在左侧模块导航条上，带 `meta.requiresAdmin` 守卫就会自动拦成 `/403`——**ModuleNav 与 guards 都不用改**。管理台类视图用 `() => import()` 懒加载，聊天这类落地页保持静态 import。
+6. **`chatbot/README.md` 末尾的「后续待加」**：见该文件，已完成的条目会随变更删掉。
+7. **多模态往哪扩**：图片输入已通（`image_url` + base64）。下一步自然是把 `data` 换成对象存储 key（多实例部署的前提）、给孤儿附件加定时清理、或按 `usage` 回填做动态 token 预算（把图片 token 也算进去）。
 
 ---
 
@@ -1209,8 +1210,8 @@ npm run preview      # 本地预览 dist/
 19. **qwen3.8-max / qwen3.8-flash 的 `preserve_thinking` 默认 true**：要求历史 assistant 消息把 `reasoning_content` 完整回传，且不支持拼进 `content` 回传。我们把存库的思考随历史带上（`LlmMessage.reasoningContent`）；缺了不报错但多轮推理质量打折。
 20. **`thinking_budget` 与 `reasoning_effort` 不能同时设置**（qwen3.8 系），同时设会报错。我们只发 `thinking_budget`；档位 4096 / 16384 对齐官方 low / medium 映射，131072 是 qwen3.8 系默认值、也正好是 qwen3.6-flash 的思维链上限。
 21. **本地百炼 wiki 快照曾缺 `qwen3.8-flash`**（flash 线只到 qwen3.7），导致一度误判该模型不存在；以官方 OpenAI 兼容 Chat 文档为准（文档里三处点名 qwen3.8-flash）。查模型存不存在别只信本地快照。
-22. **system 消息不占 `llm.max-history-messages` 名额**：它是人设不是对话，截历史不该把它截掉；但它**计入输入 token**，人设写两千字每轮都烧两千字的输入钱。 |
-23. **联网搜索默认关且只暴露开关**：turbo 策略约 3 元/千次 + 检索内容带来的输入 token；`qwen3.8-max` / `qwen3.8-flash` 在 Chat Completions 下不支持 `search_strategy: agent`（要 agent 得走 Responses API），所以界面不给策略选择。 |
+22. **system 消息不占 `llm.max-history-messages` 名额**：它是人设不是对话，截历史不该把它截掉；但它**计入输入 token**，人设写两千字每轮都烧两千字的输入钱。
+23. **联网搜索默认关且只暴露开关**：turbo 策略约 3 元/千次 + 检索内容带来的输入 token；`qwen3.8-max` / `qwen3.8-flash` 在 Chat Completions 下不支持 `search_strategy: agent`（要 agent 得走 Responses API），所以界面不给策略选择。
 25. **`LlmContentPart.isImage()` 必须 `@JsonIgnore`**：Jackson 会把 `isXxx()` 当 getter 序列化成 `"image": true`，而百炼对 content 数组元素做 pydantic 严格校验，多一个不认识的字段就整请求 400，错误文案还是一串 validation errors，根因极难看出。同理 `LlmMessage` 上的 `text()` / `imageCount()` / `hasImages()` 靠「没有 get/is 前缀」才没被序列化出去，改名时别加前缀。
 26. **一个附件只能挂一条消息**：`linkToMessage` 的 UPDATE 带 `message_id IS NULL`，重复提交同一个 id 会 400「附件不可用」。副作用是「发送失败后重试」必须重新选图（旧附件已挂在失败那条用户消息上）；前端发送成功后会清空 `pending`，正常路径感知不到。
 27. **多模态校验的顺序是刻意的**：`chat()` 里「附件校验 → 模型白名单 → 落库」，保证非法请求不留半条消息；但「历史里有旧图 + 用户换了非视觉模型」只能在落库后查出来，此时 400 是**可接受的**（用户消息还在，换回视觉模型点重新生成即可）。反过来 `regenerate()` 必须先查再删，否则旧回答白删。
@@ -1229,7 +1230,10 @@ npm run preview      # 本地预览 dist/
 37. **审计的 `action` 是字符串不是 ENUM，别「顺手」改成 enum**：加审计动作应该是零迁移的（往 `AuditAction` 加常量即可）；改成 ENUM 每加一个动作都要手工 ALTER 列。`AuditAction.label()` 对不认识的动作名**原样返回**，是因为回滚过版本后表里可能出现新代码不认识的老动作，界面不该因此整页崩。
 36. **重置密码的 `generatedPassword` 不要存进任何前端状态**：它只在响应里出现一次；弹窗展示后随组件卸载丢弃。存 localStorage 等于把明文密码写盘。
 33. **本机 `mvnw` 默认跑在 JDK 1.8 上**（`JAVA_HOME` 指向 `C:\Program Files\Java\jdk-1.8`）：record、`instanceof` 模式匹配全不认识，报一堆「需要 class, interface, enum」，看起来像代码写错了其实是工具链。编译 / 启动本项目前必须 `JAVA_HOME` 指到 26（IntelliJ 装在 `~/.jdks/openjdk-26.0.2.1`），IDE 里跑不受影响是因为 IDE 用自己下载的 JDK。
-24. **历史 token 预算是估算值**：没有分词器可用，按「中文 1 字 1 token、其余 4 字符 1 token」近似；预算是保护性上限不是精确配额。每轮真实上下文大小以用量里的 `prompt_tokens` 为准（界面已显示），两者对不上时信后者。 |
+24. **历史 token 预算是估算值**：没有分词器可用，按「中文 1 字 1 token、其余 4 字符 1 token」近似；预算是保护性上限不是精确配额。每轮真实上下文大小以用量里的 `prompt_tokens` 为准（界面已显示），两者对不上时信后者。
+42. **日期注入的时区写死 `Asia/Shanghai`，别顺手改成 `systemDefault()`**：模型没有时钟，「今天几号」只能靠注入的 system 消息回答；跟服务器时区走的话，部署到 UTC 容器后每天早 8 点前会答成昨天。也不要用 `"CST"` 这种缩写（同时指中国标准时间和美国中部时间）。日期必须与用户**人设合成一条** system 消息——部分服务商只认第一条。
+
+43. **代码块里的 `hljs` 类必须由 fence 渲染器自己补**：highlight.js 的主题（`github-dark.css`）把文字颜色和背景都挂在 `.hljs` 上，而 markdown-it 只给 `<code>` 加 `language-xx`、不加 `hljs`。少了这个类，主题的 `color` 永远不生效，代码块文字退回继承来的正文色——浅色主题下 `--text` 是近黑的 `#22201b`，底是 `MarkdownContent.vue` 里硬编码的 `#0d1117`，于是「黑底黑字」。两个放大症状的巧合：① 暗色模式看起来完全正常（继承到的正文色本来就是浅的），所以只在浅色用户那里暴露；② 语言被 highlight.js 认出来的代码块只有关键字 / 字符串那类 token 可见，纯文本（模型常写的 ```text）整块不可读——这就是它「有时候」才出现的原因。修在 `lib/markdown.ts` 的 fence 渲染器里（2026-10-08）。
 
 ### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条，2026-09-25 追加第 6、7 条）
 
@@ -1257,11 +1261,8 @@ npm run preview      # 本地预览 dist/
 | 2026-09-21 | 全量重写为「接手即用」的事实源：新增五分钟速览与检索入口速查、逐文件清单、Bean 装配表、三类请求调用链、前后端编码约定、SSE 解析要点、ChatView 状态与行为表、列级表结构说明、API 请求/响应 JSON 示例与状态码语义、五条核心流程时序、第十一节文档同步清单、18 条踩坑记录、3 条文档偏差。同时更正：会话不按用户隔离、`MessageBubble` 无 Markdown 渲染、`AGENTS.md` 与 `test_sse.py` 被 gitignore |
 | 2026-09-21（第二次） | 修正三份 README 共 4 处与代码不符的表述（`MessageBubble` 的 Markdown 渲染、`server.error.include-message`、会话不按用户隔离），并把 13.3 从「待修正的偏差」改写为「已修正记录」；根 `README.md` 增加 For AI agents 指引与更准确的文档地图 |
 | 2026-09-24 | 删除手动测试脚本 `chatbot/test_sse.py` 及 `.gitignore` 中对应规则（`AGENTS.md` 因此从第 78 行移到第 75 行）。同步清掉本文 5 处引用：五分钟速览、2.1 目录树、2.2 文件清单、5.3 `.gitignore` 条目表、7.4 手动测试、10.1 命令块；改写 13.1 第 7 条与 13.2 第 2 条。**编号刻意保留**：13.2 仍是 18 条，`AGENTS.md` 里按「第 7 / 8 / 17 / 18 条」的交叉引用不受影响。|
-
 | 2026-09-24（第二次） | **会话按用户隔离 + 消息分页**。`conversation` 加 `owner_id`（NOT NULL + 外键 `fk_conversation_owner` + 复合索引 `idx_conversation_owner_updated`）；3~7 号接口接 `CurrentUser`，归属校验统一在 service 层且**一律 404**；`GET /{id}/messages` 从数组改成 `MessagePageVO{items, beforeId, hasMore}` 游标分页（默认 50、上限 200），`ChatService.recentHistory` 的 LIMIT 下推到 SQL；前端加「加载更早的消息」按钮 + 滚动位置补偿。旧会话按用户要求全部清空，`init.sql` 新增「已有库升级」段记录迁移 SQL。13.1 删掉第 1、2 条并重排为 9 条，十二删掉第 5、6 条；**13.2 编号不动**，`AGENTS.md` 里按「第 7 / 8 / 17 / 18 条」的交叉引用不受影响 |
----
 | 2026-09-24（第三次） | **配置收紧（P0 收尾）**：`spring.datasource.url` / `username` 包上 `DB_URL` / `DB_USERNAME` 占位符；新增 `cors.allowed-origins`（`CORS_ALLOWED_ORIGINS`，默认只有 Vite 的 5173）+ `config/CorsProperties.java`，`WebConfig` 改读它，**留空启动失败**而不是退化成 `*`。13.1 删掉 CORS 全开与 datasource 硬编码两条，重排为 7 条；九加第 16 条。实测：5173 预检 200 带 ACAO 头、陌生源 403 无 ACAO 头、无 Origin 的同源调用不受影响、`DB_USERNAME` 环境变量确实生效 |
-
 | 2026-09-24（第四次） | **P1-1：Markdown 渲染 + 代码高亮 + 一键复制**。新增 `src/lib/markdown.ts`（markdown-it `html:false` + `breaks:true` + highlight.js common 子集 + DOMPurify 消毒；自定义 fence 给代码块加语言标签和复制按钮）与 `components/MarkdownContent.vue`（委托监听处理复制、流式光标用 CSS `::after` 挂在最后一个块末尾）；`MessageBubble` 里助手消息改走 Markdown、**用户消息刻意保持纯文本**。踩到一个坑：markdown-it 给围栏代码的 `<code>` 只加 `language-xx`、不加 `hljs` 类，行内代码样式会命中它画出逐行灰块，已用 `pre code` 覆盖修复。13.1 删掉「无 Markdown 渲染」重排为 6 条 |
 | 2026-09-24（第五次） | **P1-2：会话重命名**。新增 `PUT /api/conversations/{id}/title`（`RenameConversationRequest`，title trim 后入库、1~100 字）；repository 用 `@Modifying` JPQL 只改 title，**刻意不触发 `@PreUpdate`**——改名不是「活动」，不该把会话顶到列表最前面；越权改名影响行数 0 → 404。前端侧边栏双击标题行内编辑（Enter / 失焦提交、Esc 取消），成功后只覆盖本地那一条。13.1 第 2 条去掉「无会话重命名」，`chatbot/README.md`「后续待加」同步删条目 |
 | 2026-09-24（第六次） | **P1-3：思考过程持久化**。`message` 加可空列 `reasoning`（LONGTEXT）；`ChatService` 在流式期间把思考全文攒进 `reasoningFull`，结束时随助手消息一起入库（中断 / 失败走 `savePartial` 也带上）；`MessageVO` 加 `reasoning` 并标 `@JsonInclude(NON_NULL)`，没思考时字段不下发；前端 `types.ts` / `ChatView` 把它读回 `UiMessage.reasoning`，刷新后折叠块可展开重读。**可空列迁移，旧消息保持 NULL，不需要清数据**（`init.sql`「已有库升级」第二段）。13.1 删掉「思考过程不持久化」重排为 5 条 |
@@ -1282,5 +1283,9 @@ npm run preview      # 本地预览 dist/
 | 2026-09-25（第二十一次） | **角色层级模型**：新增 `SUPER_ADMIN=2`（超级管理员）与 `GUEST=3`（访客：应用内权限同普通用户、层级最低，作「降权但不禁用」的承接位）；`Roles.rank()` 表达层级，管理端所有写操作要求「目标层级严格低于操作者」，建号/改角色要求「新角色层级严格低于操作者」，自己的角色界面锁死 + 后端 400 双保险；「最后一个启用的管理者 / 超级管理员」两道闸。种子账号（`AdminUserInitializer` 与 `init.sql`）改为超级管理员，`init.sql` 附老库升级 UPDATE。`AdminUserVO` 加 `canManage`、`/options` 的 roles 按操作者层级过滤，前端锁死行把 select 换成纯文本标签。临时库实测：超管/管理员/访客三种视角的 canManage 与控件锁死状态、越级操作 400 文案、指派平级角色 400、访客 403。6.1 / 7.2 / 8.6 / 九 / 13.2 同步 |
 | 2026-09-25（第二十二次） | **`/options` 拆成「可指派」与「可筛选」两套角色字典**：`UserAdminOptionsVO` 加 `allRoles`（全量角色，层级从高到低），`roles` 语义不变（层级严格低于操作者）；前端 `types.ts` 同步，`UsersView.vue` 的角色**筛选器**改用 `allRoles`（行内改角色与新建弹窗仍用 `roles`）。补的是第二十一次留下的读路径缺口：管理员在列表里看得见管理员 / 超管的行（控件锁死），筛选器却只有「普通用户 / 访客」两档。临时库 + 浏览器实测：超管 roles=3 / allRoles=4，管理员 roles=2 / allRoles=4；管理员按「管理员」「超级管理员」筛选各命中 1 行且 canManage=false、控件全锁；新建弹窗的角色下拉仍无「超级管理员」。2.2 / 4.1 / 7.1 / 7.2 / 13.2 第 39 条同步 |
 | 2026-09-25（第二十三次） | **个人信息 + 管理台批量 + 种子账号自愈**。① 个人信息：`sys_user` 加 `nickname` / `email` / `phone` 三列（均可空）；新增 24~26 号接口（`PUT /users/me/profile`、`GET /users/me/stats`、`POST /users/me/revoke`）与 `UpdateProfileRequest` / `UserProfileStatsVO`；`UserVO` 带上新字段与 status/lastLoginAt；前端新增平级模块 `/profile`（`ProfileView.vue` + `IconUser.vue`，改密码 / 改人设 / 强制改密复用既有弹窗），`auth.ts` 加 `displayName`（昵称优先），顶栏与左下角菜单的头像首字母跟着昵称走。② 管理台批量：27 号接口 `POST /api/admin/users/batch`（六个动作、`ids` 上限 100、逐条独立事务、响应逐条结果）+ `AdminUserBatchService`（单独成 Bean，理由见 8.6）+ `BatchUser*` 三个 DTO；前端 UsersView 加多选与批量条、`BatchResetPasswordDialog` / `BatchResultDialog`。③ 种子：`AdminUserInitializer` 改名 `SeedUserInitializer`，新增「超管自愈」（系统无启用超管时把种子账号提回超管，老库 role=1 自动升级）与「每角色一个测试账号」（test_super / test_admin / test_user / test_guest，密码统一 test123456，`auth.seed-test-users` 可关）；`init.sql` 同步种子 role=2、测试账号 INSERT 与两段升级 SQL。④ 修左下角账号菜单居中弹出导致左半截出屏（13.2 第 39 条）。浏览器 + 接口实测：菜单完整可见、资料保存后导航头像跟随、批量禁用/启用/改角色/重置/下线/删除的逐条成功与逐条失败文案、层级越界 400、普通用户 403、revoke 后旧 token 401 且原密码可重登。7.1 / 7.2 / 8.6 / 九 / 13.1 / 13.2 / 13.3 同步 |
-*最后更新：2026-09-25*
+| 2026-10-08（第一次） | **LLM API Key 改从环境变量 `DASHSCOPE_API_KEY` 读取**。`application.properties` 的 `llm.api-key` 占位符改成 `${DASHSCOPE_API_KEY:${LLM_API_KEY:}}`（优先新名、兼容旧名）；`application-local.properties` 里原先写死的真实 key 注释掉——profile 专属文件的优先级高于主配置，留着字面量会让环境变量**静默失效**。2.2 文件说明、5.1 表格、10.2 启动步骤与 `chatbot/README.md` 配置表同步；`MockLlmClient` 的兜底提示文案也改成「配置环境变量 DASHSCOPE_API_KEY」 |
+| 2026-10-08（第二次） | **注入当前日期（修「问天气/日期答错」）**。`ChatService` 新增常量 `CLOCK_ZONE = Asia/Shanghai` 与 `buildSystemPrompt()`：每轮第一条 system 消息固定是「`当前日期：YYYY-MM-DD`（时区 Asia/Shanghai）+ 用户人设」合成的一条（`recentHistory()` 调用）。理由：模型没有时钟，不注入就只能靠训练数据猜、或把检索到的网页里的日期当成今天，表现为同一天里 10月6日 / 10月7日来回漂。时区写死不用 `systemDefault()`（UTC 容器会答成昨天）、不用 `"CST"` 缩写；日期与人设合成一条而不是发两条（部分服务商只认第一条 system）。`MockLlmClient` 的回显标签 `【Mock 人设】` 改成 `【Mock 系统】`。2.2 / 8.1 / 13.2 加第 42 条 与 `chatbot/README.md`「接口」段同步 |
+| 2026-10-08（第三次） | **修浅色主题下代码块「黑底黑字」**。`chatbot-web/src/lib/markdown.ts` 的 fence 渲染器在调 markdown-it 默认渲染前给 code token `attrJoin('class', 'hljs')`。根因：highlight.js 主题（`github-dark.css`）的 `color` / `background` 都挂在 `.hljs` 上，而 markdown-it 只加 `language-xx`，主题因此从未生效——文字色退回继承的正文色（浅色模式 `--text: #22201b`），底是 `MarkdownContent.vue` 里硬编码的 `#0d1117`，两个都近黑；暗色模式正常、认得出的语言也只有部分 token 着色，所以表现为「有时」。13.2 加第 43 条、4.1 文件清单与 `chatbot-web/README.md`「Markdown 渲染」段同步。验证：`npm run type-check` 通过；Chrome 实测（浅色）`pre code` 计算色 `rgb(34,32,27)` → `rgb(201,209,217)`、底恒为 `rgb(13,17,23)`，暗色模式下同样 `rgb(201,209,217)` |
+| 2026-10-08（第四次） | **文档精简 + 中文统一**。三份 README 只留各自的定位（根 README 只讲启动、两个模块 README 只讲契约与取舍），删掉与本文重复的结构性内容并把细节指向本文；根 README 从英文改写为中文，去掉「越权访问一律 404」这类应在本文展开的细节。顺带修本文硬伤：九、安全设计要点与十二、扩展点的编号重排连续（此前存在重复的 18/19 与乱序的 6），删掉九里夹在列表中间的分隔线；5.1 与 10.2 里过时的类名 `AdminUserInitializer` 改回 `SeedUserInitializer`；修复 2.2 controller 表两行错位的单元格分隔，并补回第十四节被空行与分隔线截断的表格。 |
+*最后更新：2026-10-08*
 

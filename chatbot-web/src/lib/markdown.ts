@@ -38,7 +38,12 @@ const md = new MarkdownIt({
  */
 const defaultFence = md.renderer.rules.fence
 md.renderer.rules.fence = (tokens, idx, options, env, self) => {
-  const lang = (tokens[idx]?.info ?? '').trim().split(/\s+/)[0] ?? ''
+  const token = tokens[idx]
+  const lang = (token?.info ?? '').trim().split(/\s+/)[0] ?? ''
+  // 必须自己补 hljs 类：highlight.js 的主题（github-dark.css）把文字颜色挂在 .hljs 上，
+  // 而 markdown-it 只加 language-xx、不加 hljs。少了它主题的 color 永不生效，代码块文字退回
+  // 继承来的正文色——浅色主题下 --text 近黑（#22201b）+ 下面 CSS 里硬编码的深色底 = 黑底黑字。
+  token?.attrJoin('class', 'hljs')
   const inner = defaultFence ? defaultFence(tokens, idx, options, env, self) : ''
   return (
     '<div class="code-block">' +

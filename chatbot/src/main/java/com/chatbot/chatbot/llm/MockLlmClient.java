@@ -38,7 +38,7 @@ public class MockLlmClient implements LlmClient {
             emit(listener::onReasoning, reasoningText);
         }
 
-        // 把收到的人设回显一行：没有真实 key 时也能肉眼确认 system prompt 真的进了模型输入
+        // 把收到的 system 消息回显一行：没有真实 key 时也能肉眼确认「当前日期 + 人设」真的进了模型输入
         // 联网开关也回显一行：没 key 时也能确认开关真的传到了调用层
         String searched = Boolean.TRUE.equals(options.enableSearch())
                 ? "【Mock 联网】已模拟检索到 3 条网页结果。\n"
@@ -50,13 +50,13 @@ public class MockLlmClient implements LlmClient {
                 : "";
         String persona = (systemPrompt == null || systemPrompt.isBlank())
                 ? ""
-                : "【Mock 人设】" + systemPrompt.substring(0, Math.min(30, systemPrompt.length())) + "\n";
+                : "【Mock 系统】" + systemPrompt.substring(0, Math.min(30, systemPrompt.length())) + "\n";
         String reply = persona
                 + searched
                 + pics
                 + "【Mock 回复】收到你的消息：「" + lastUser + "」。\n"
                 + "这是本地 Mock 的流式回复。\n"
-                + "在 application.properties 里填写 llm.api-key（百炼 API Key）后，就会切换到真实模型。";
+                + "配置环境变量 DASHSCOPE_API_KEY（或旧名 LLM_API_KEY）后重启，就会切换到真实模型。";
         emit(listener::onToken, reply);
 
         // 假用量：按 4 字符 ≈ 1 token 粗估，让「用量展示」这条链路在没有 key 时也能验
