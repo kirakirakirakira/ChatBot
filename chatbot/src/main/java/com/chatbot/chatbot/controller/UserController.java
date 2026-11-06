@@ -3,6 +3,7 @@ package com.chatbot.chatbot.controller;
 import com.chatbot.chatbot.auth.CurrentUser;
 import com.chatbot.chatbot.dto.ChangePasswordRequest;
 import com.chatbot.chatbot.dto.LoginResponse;
+import com.chatbot.chatbot.dto.UpdateMemorySettingsRequest;
 import com.chatbot.chatbot.dto.UpdateProfileRequest;
 import com.chatbot.chatbot.dto.UpdateSystemPromptRequest;
 import com.chatbot.chatbot.dto.UserProfileStatsVO;
@@ -71,6 +72,13 @@ public class UserController {
     @GetMapping("/me/stats")
     public UserProfileStatsVO stats(CurrentUser currentUser) {
         return userService.stats(currentUser);
+    }
+
+    /** 开关 AI 记忆。返回整份用户信息，前端直接覆盖本地登录态。 */
+    @PutMapping("/me/memory-settings")
+    public UserVO updateMemorySettings(CurrentUser currentUser,
+                                       @Valid @RequestBody UpdateMemorySettingsRequest request) {
+        return userService.updateMemorySettings(currentUser, request);
     }
 
     /**

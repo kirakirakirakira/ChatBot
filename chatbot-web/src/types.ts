@@ -75,7 +75,7 @@ export interface MessagePage {
 
 /** 后端 SSE 事件（ChatEvent）：reasoning/delta 用 content，done 用 messageId，error 用 content。 */
 export interface ChatStreamEvent {
-  type: 'reasoning' | 'delta' | 'done' | 'error'
+  type: 'reasoning' | 'delta' | 'done' | 'error' | 'agent_status' | 'tool_call' | 'tool_result'
   content?: string
   messageId?: number
   /** done 事件附带：这条回答的模型与用量，前端当场回填，不用等刷新。 */
@@ -83,6 +83,25 @@ export interface ChatStreamEvent {
   prompt_tokens?: number
   completion_tokens?: number
   reasoning_tokens?: number
+  /** Agent 工具调用事件。 */
+  callId?: string
+  tool?: string
+  label?: string
+  args?: Record<string, unknown>
+  status?: 'OK' | 'ERROR'
+  summary?: string
+  durationMs?: number
+}
+
+/** 一条工具调用的界面状态；只存在于本轮生成期间，刷新历史后不重放。 */
+export interface AgentStep {
+  callId: string
+  tool: string
+  label: string
+  args: Record<string, unknown>
+  status: 'running' | 'ok' | 'error'
+  summary?: string
+  durationMs?: number
 }
 
 /** 界面渲染用消息：比后端 Message 多了流式生成期间的临时状态。 */
@@ -104,6 +123,10 @@ export interface UiMessage {
   reasoningTokens?: number
   /** 这条消息带的图片；发送时先用本地预览地址，历史加载时只有 id、由缩略图组件去取字节。 */
   attachments?: AttachmentRef[]
+  /** Agent 工具调用过程；只在流式期间展示，刷新后不再从数据库重放。 */
+  agentSteps?: AgentStep[]
+  /** Agent 正在分析 / 整理时的临时状态。 */
+  agentStatus?: string
 }
 
 /** 后端返回的登录用户信息（UserVO）。没有 password 字段，哈希也不出网。 */
@@ -130,6 +153,8 @@ export interface CurrentUser {
   lastLoginAt?: string | null
   /** 该用户的系统提示词（人设）；没设过为 null。管理员的用户列表里恒为 null。 */
   systemPrompt?: string | null
+  /** 是否允许 AI 从对话中学习长期记忆。旧登录态里没有该字段时按开启处理。 */
+  memoryEnabled?: boolean
   /**
    * 管理员重置过密码、本人还没改：前端据此强制弹改密框。
    * 可选而不是必填：localStorage 里升级前存下的旧登录态没有这个字段，读出来是 undefined（= 不强制）。
@@ -283,4 +308,75 @@ export interface BatchUserResult {
   succeeded: number
   failed: number
   items: BatchUserItem[]
+}
+
+/** ---------- 博客（对应后端 /api/blog，所有接口都要登录） ---------- */
+
+/** 文章状态，与后端 entity/PostStatus 一一对应。中文名一律用后端返回的 statusLabel。 */
+export type BlogPostStatus = 'DRAFT' | 'PENDING' | 'PUBLISHED' | 'REJECTED' | 'HIDDEN'
+
+/**
+ * 博客列表的一项（后端 BlogPostSummaryVO）。
+ * **刻意不含 content**：列表页只需要摘要，正文单独走详情接口，避免一页拉几百 KB。
+ */
+export interface BlogPostSummary {
+  id: number
+  title: string
+  /** 作者没填、正文也提不出文字时为 null，界面显示「暂无摘要」。 */
+  summary: string | null
+  authorId: number
+  /** 昵称优先、没设昵称回退用户名。 */
+  authorName: string
+  status: BlogPostStatus
+  /** 后端给的中文名（已发布 / 待审核 / …）。 */
+  statusLabel: string
+  /** 发布时间；草稿 / 待审 / 驳回 / 下架为 null。列表按它倒序。 */
+  publishedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+/** 博客详情（后端 BlogPostVO）：列表字段 + 正文。 */
+export interface BlogPost extends BlogPostSummary {
+  /** Markdown 原文。渲染必须走 MarkdownContent（markdown-it + DOMPurify），不要用 v-html。 */
+  content: string
+}
+
+/** 新建 / 编辑文章的请求体。summary 传空串 = 让后端从正文自动提取。 */
+export interface SaveBlogPostBody {
+  title: string
+  summary: string
+  content: string
+}
+
+/** ---------- AI 记忆（对应后端 /api/users/me/memories） ---------- */
+
+/** 记忆类型，与后端 entity/MemoryKind 一一对应。中文名一律用后端返回的 kindLabel。 */
+export type MemoryKind = 'PREFERENCE' | 'FACT' | 'PROJECT' | 'CONSTRAINT'
+
+/** 记忆来源：AUTO = 模型自动抽取，MANUAL = 用户手动添加或编辑过。 */
+export type MemorySource = 'AUTO' | 'MANUAL'
+
+/** GET /api/users/me/memories 的一行。 */
+export interface UserMemory {
+  id: number
+  kind: MemoryKind
+  /** 后端给的中文类型名（偏好 / 事实 / 项目 / 约束）。 */
+  kindLabel: string
+  content: string
+  source: MemorySource
+  /** 后端给的中文来源名（自动 / 手动）。 */
+  sourceLabel: string
+  /** 0.00 ~ 1.00；手动记忆固定 1。 */
+  confidence: number
+  createdAt: string
+  updatedAt: string
+  /** 最近一次被注入 Prompt 的时间；还没用过为 null。 */
+  lastUsedAt: string | null
+}
+
+/** 新增 / 编辑记忆的请求体。 */
+export interface SaveMemoryBody {
+  kind: MemoryKind
+  content: string
 }

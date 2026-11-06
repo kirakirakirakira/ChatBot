@@ -9,6 +9,7 @@ import com.chatbot.chatbot.dto.MessageVO;
 import com.chatbot.chatbot.entity.Conversation;
 import com.chatbot.chatbot.entity.Message;
 import com.chatbot.chatbot.entity.Role;
+import com.chatbot.chatbot.repository.AgentToolCallRepository;
 import com.chatbot.chatbot.repository.AttachmentRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
 import com.chatbot.chatbot.repository.MessageRepository;
@@ -53,15 +54,18 @@ public class ConversationService {
      * 反向再依赖它就是构造器循环，Spring 起不来。「附件元信息按消息分组」本来也是消息列表自己的事。
      */
     private final AttachmentRepository attachmentRepository;
+    private final AgentToolCallRepository agentToolCallRepository;
 
     public ConversationService(ConversationRepository conversationRepository,
                                MessageRepository messageRepository,
                                UserRepository userRepository,
-                               AttachmentRepository attachmentRepository) {
+                               AttachmentRepository attachmentRepository,
+                               AgentToolCallRepository agentToolCallRepository) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.userRepository = userRepository;
         this.attachmentRepository = attachmentRepository;
+        this.agentToolCallRepository = agentToolCallRepository;
     }
 
     /**
@@ -134,6 +138,8 @@ public class ConversationService {
     @Transactional
     public void delete(Long id, CurrentUser user) {
         Conversation conversation = requireOwned(id, user);
+        // 工具日志没有外键，先清掉，避免会话删了留下一堆孤儿审计行
+        agentToolCallRepository.deleteByConversationId(conversation.getId());
         // 附件也要一起删，而且必须排在会话之前：fk_attachment_conversation 是 RESTRICT，留着会直接报约束冲突
         attachmentRepository.deleteByConversationId(conversation.getId());
         messageRepository.deleteByConversationId(conversation.getId());

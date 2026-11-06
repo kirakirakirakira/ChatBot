@@ -46,15 +46,11 @@ function onKeydown(e: KeyboardEvent): void {
   <div class="modal-mask" @click.self="emit('close')" @keydown="onKeydown">
     <div class="modal-card wide">
       <h2 class="modal-title">系统提示词</h2>
-      <p class="hint-text">
-        每轮对话都会把这段话作为 system 消息放在历史最前面，所有会话共用。清空后保存 = 移除人设。
-      </p>
       <textarea
         v-model="draft"
         class="field-input prompt-input"
         rows="8"
         maxlength="2000"
-        placeholder="例如：你是一名资深 DBA，只回答数据库相关问题，输出尽量用表格"
       ></textarea>
       <div class="prompt-foot">
         <span class="counter">{{ draft.length }} / 2000</span>
@@ -71,12 +67,6 @@ function onKeydown(e: KeyboardEvent): void {
 </template>
 
 <style scoped>
-.hint-text {
-  margin: 0 0 8px;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-
 .prompt-input {
   width: 100%;
   resize: vertical;

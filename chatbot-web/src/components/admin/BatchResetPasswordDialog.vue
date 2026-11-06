@@ -95,18 +95,11 @@ async function submit(): Promise<void> {
           class="field-input"
           type="text"
           autocomplete="off"
-          placeholder="6~64 位，所有人共用"
           :disabled="submitting"
           autofocus
         />
       </label>
-      <p v-else class="modal-tip">
-        由后端用 SecureRandom 生成，每人 16 位且互不相同；明文只在结果窗里出现一次，请当场抄走或复制。
-      </p>
-
-      <p class="modal-tip">
-        这些账号的现有登录态会立刻失效，且下次登录被强制改密码。
-      </p>
+      <p class="modal-tip">重置后这些账号的登录态会立即失效。</p>
 
       <div class="modal-actions">
         <button class="btn-ghost" type="button" :disabled="submitting" @click="emit('close')">取消</button>

@@ -54,7 +54,6 @@ async function submit(): Promise<void> {
         </span>
         <h1 class="login-title">Chatbot</h1>
       </div>
-      <p class="login-subtitle">登录后开始对话</p>
 
       <div v-if="error" class="alert-error login-error">{{ error }}</div>
 
@@ -66,7 +65,6 @@ async function submit(): Promise<void> {
           type="text"
           name="username"
           autocomplete="username"
-          placeholder="请输入用户名"
           :disabled="submitting"
           autofocus
         />
@@ -80,7 +78,6 @@ async function submit(): Promise<void> {
           type="password"
           name="password"
           autocomplete="current-password"
-          placeholder="请输入密码"
           :disabled="submitting"
         />
       </label>
@@ -88,8 +85,6 @@ async function submit(): Promise<void> {
       <button class="btn-primary login-submit" type="submit" :disabled="submitting">
         {{ submitting ? '登录中…' : '登录' }}
       </button>
-
-      <p class="login-hint">初始管理员 admin / admin，登录后请尽快修改密码</p>
     </form>
   </div>
 </template>
@@ -155,13 +150,6 @@ async function submit(): Promise<void> {
   letter-spacing: 0.3px;
 }
 
-.login-subtitle {
-  margin: -6px 0 6px;
-  font-size: 13px;
-  text-align: center;
-  color: var(--text-muted);
-}
-
 .login-submit {
   margin-top: 6px;
   width: 100%;
@@ -170,11 +158,4 @@ async function submit(): Promise<void> {
   font-size: 15px;
 }
 
-.login-hint {
-  margin: 2px 0 0;
-  font-size: 12px;
-  text-align: center;
-  color: var(--text-muted);
-  opacity: 0.85;
-}
 </style>

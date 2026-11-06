@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, type Component } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch, type Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { clearSession, currentUser, displayName, isAdmin } from '@/auth'
 
@@ -19,6 +19,32 @@ interface NavItem {
 }
 
 const router = useRouter()
+
+/**
+ * 展开 / 收起。
+ * 默认展开：只有图标时，新用户必须点进去才知道「这本书」是博客——发现性优先于省 120px。
+ * 状态存 localStorage：同一个人收起一次，之后每次进应用都保持收起，不用反复点。
+ * 读写都包 try/catch：隐私模式 / 禁用存储时不该让整个导航条崩掉，退回默认展开即可。
+ */
+const NAV_EXPANDED_KEY = 'chatbot.navExpanded'
+
+function readStoredNavExpanded(): boolean {
+  try {
+    return localStorage.getItem(NAV_EXPANDED_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+const expanded = ref(readStoredNavExpanded())
+
+watch(expanded, (value) => {
+  try {
+    localStorage.setItem(NAV_EXPANDED_KEY, value ? '1' : '0')
+  } catch {
+    // 存不了就算了：本次会话仍然按用户点的状态显示
+  }
+})
 
 /**
  * 导航条底部的账号菜单。
@@ -79,17 +105,31 @@ const items = computed<NavItem[]>(() =>
 </script>
 
 <template>
-  <nav class="module-nav" aria-label="功能模块">
+  <nav class="module-nav" :class="{ expanded }" aria-label="功能模块">
+    <!-- 折叠按钮放在第一项上方：它是导航本身的一部分，不该藏进账号菜单 -->
+    <button
+      class="nav-toggle"
+      type="button"
+      :title="expanded ? '收起导航' : '展开导航'"
+      :aria-label="expanded ? '收起导航' : '展开导航'"
+      :aria-expanded="expanded"
+      @click="expanded = !expanded"
+    >
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="m15 18-6-6 6-6" />
+      </svg>
+    </button>
     <!-- 激活态直接用 vue-router 自带的 router-link-active（含子路由匹配），不用自己算 -->
     <RouterLink
       v-for="item in items"
       :key="item.path"
       class="nav-item"
       :to="item.path"
-      :title="item.title"
+      :title="expanded ? undefined : item.title"
       :aria-label="item.title"
     >
-      <component :is="item.icon" />
+      <component :is="item.icon" class="nav-icon" />
+      <span v-if="expanded" class="nav-label">{{ item.title }}</span>
     </RouterLink>
 
     <div class="nav-spacer" />
@@ -104,6 +144,7 @@ const items = computed<NavItem[]>(() =>
         @click="menuOpen = !menuOpen"
       >
         <span class="avatar">{{ avatarChar }}</span>
+        <span v-if="expanded" class="account-btn-name" :title="displayName">{{ displayName }}</span>
       </button>
       <div v-if="menuOpen" class="account-menu" role="menu">
         <div class="account-head">
@@ -143,20 +184,81 @@ const items = computed<NavItem[]>(() =>
   gap: 6px;
   width: 56px;
   height: 100%;
-  padding: 10px 0;
+  padding: 10px 8px;
+  box-sizing: border-box;
   background: var(--panel-2);
   border-right: 1px solid var(--border);
+  transition: width 160ms ease;
+}
+
+/* 展开态：176px 足够放下「个人信息 / 用户管理 / 操作记录」这类最长 4 个字的标签 */
+.module-nav.expanded {
+  width: 176px;
+  align-items: stretch;
+}
+
+/* 折叠按钮：展开时朝左（点了收起），折叠时旋转 180° 朝右（点了展开） */
+.nav-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 100%;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-s);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.nav-toggle:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+.nav-toggle svg {
+  transition: transform 160ms ease;
+}
+
+.module-nav:not(.expanded) .nav-toggle svg {
+  transform: rotate(180deg);
 }
 
 .nav-item {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 38px;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-shrink: 0;
+  width: 100%;
   height: 38px;
+  padding: 0 9px;
+  box-sizing: border-box;
   border-radius: var(--radius-m);
   color: var(--text-muted);
+  text-decoration: none;
+  overflow: hidden;
   transition: background 120ms ease, color 120ms ease;
+}
+
+/* 折叠态回到原来的 38×38 居中图标；展开态才左对齐并显示文字 */
+.module-nav:not(.expanded) .nav-item {
+  justify-content: center;
+  padding: 0;
+}
+
+.nav-icon {
+  flex-shrink: 0;
+}
+
+.nav-label {
+  min-width: 0;
+  font-size: 13.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .nav-item:hover {
@@ -175,6 +277,7 @@ const items = computed<NavItem[]>(() =>
 
 .nav-account {
   position: relative;
+  width: 100%;
 }
 
 .avatar-btn {
@@ -183,6 +286,7 @@ const items = computed<NavItem[]>(() =>
   justify-content: center;
   width: 34px;
   height: 34px;
+  margin: 0 auto;
   padding: 0;
   border: none;
   border-radius: var(--radius-pill);
@@ -190,14 +294,37 @@ const items = computed<NavItem[]>(() =>
   cursor: pointer;
 }
 
+/* 展开态把头像按钮变成整行「头像 + 名字」，和上面的导航项对齐 */
+.module-nav.expanded .avatar-btn {
+  justify-content: flex-start;
+  gap: 10px;
+  width: 100%;
+  height: 40px;
+  padding: 0 9px;
+  margin: 0;
+  box-sizing: border-box;
+  border-radius: var(--radius-m);
+}
+
 .avatar-btn:hover {
   background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.account-btn-name {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .avatar {
   display: flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
   width: 28px;
   height: 28px;
   border-radius: var(--radius-pill);
@@ -208,9 +335,8 @@ const items = computed<NavItem[]>(() =>
 }
 
 .account-menu {
-  /* 导航条只有 56px 宽，菜单比它宽得多。原来是 left:50% + translateX(-50%) 居中弹出，
-     于是菜单的左半截直接跑到视口外面被裁掉（左下角点头像「显示不全」就是这么来的）。
-     改成贴着导航条**右侧**弹出、底边与头像对齐：菜单再宽也只往内容区里长，永远不会出屏。 */
+  /* 菜单贴着导航条右侧弹出，折叠 / 展开两种宽度下都不会出屏。
+     展开态 nav-account 宽 100%，left: 100% 正好落在导航条右边。 */
   position: absolute;
   left: calc(100% + 10px);
   bottom: 0;

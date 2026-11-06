@@ -36,6 +36,12 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
      */
     List<Message> findByConversationIdAndIdLessThan(Long conversationId, Long beforeId, Pageable pageable);
 
+    /** 取某会话中 id 大于游标的消息，按 id 正序；摘要流水线用。 */
+    List<Message> findByConversationIdAndIdGreaterThanOrderByIdAsc(Long conversationId, Long afterId, Pageable pageable);
+
+    /** 某会话中还没被摘要覆盖的消息数。 */
+    long countByConversationIdAndIdGreaterThan(Long conversationId, Long afterId);
+
     /**
      * 删除某会话的全部消息。用 @Modifying + JPQL 而不是派生 deleteBy：
      * 派生删除会先 select 再逐条 delete，长会话删一次就是 2N 条 SQL。调用方需自带事务。

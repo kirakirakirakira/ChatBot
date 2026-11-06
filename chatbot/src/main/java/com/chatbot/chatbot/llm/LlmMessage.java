@@ -22,11 +22,28 @@ import java.util.List;
 public record LlmMessage(
         String role,
         Object content,
-        @JsonProperty("reasoning_content") String reasoningContent) {
+        @JsonProperty("reasoning_content") String reasoningContent,
+        @JsonProperty("tool_calls") List<LlmToolCall> toolCalls,
+        @JsonProperty("tool_call_id") String toolCallId) {
+
+    /** 兼容原来的三参构造：普通文本 / 多模态消息不带工具字段。 */
+    public LlmMessage(String role, Object content, String reasoningContent) {
+        this(role, content, reasoningContent, null, null);
+    }
 
     /** 不带思考的普通消息。 */
     public static LlmMessage of(String role, String content) {
         return new LlmMessage(role, content, null);
+    }
+
+    /** assistant 发起的工具调用；content 通常为空，但保留模型可能同时给出的文字。 */
+    public static LlmMessage assistantToolCalls(String content, List<LlmToolCall> toolCalls) {
+        return new LlmMessage("assistant", content, null, toolCalls, null);
+    }
+
+    /** role=tool 的结果回灌；toolCallId 必须对应上一轮 assistant 的 tool_calls.id。 */
+    public static LlmMessage tool(String toolCallId, String content) {
+        return new LlmMessage("tool", content, null, null, toolCallId);
     }
 
     /**

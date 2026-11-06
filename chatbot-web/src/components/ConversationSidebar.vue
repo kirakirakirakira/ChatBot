@@ -82,7 +82,7 @@ function formatTime(iso: string): string {
       class="new-chat"
       type="button"
       :disabled="!canCreate"
-      :title="canCreate ? '新建对话' : '当前对话还没有消息，直接发消息即可'"
+      :title="canCreate ? '新建对话' : '当前对话还没有消息'"
       @click="emit('create')"
     >
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14" /><path d="M5 12h14" /></svg>
@@ -111,7 +111,7 @@ function formatTime(iso: string): string {
         <span
           v-else
           class="conv-title"
-          :title="c.title + '（双击重命名）'"
+          :title="c.title"
           @dblclick.stop="startRename(c.id, c.title)"
         >{{ c.title }}</span>
 

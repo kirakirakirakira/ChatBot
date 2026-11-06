@@ -52,11 +52,8 @@ async function copyAll(): Promise<void> {
         </span>
       </h2>
 
-      <p v-if="allOk" class="tip">全部处理成功。</p>
-      <template v-else>
-        <p class="tip">
-          下面这些没处理成功。批量是逐条独立提交的，成功的已经生效，不用因为这几条重做一遍。
-        </p>
+      <template v-if="!allOk">
+        <p class="tip">以下条目未处理成功：</p>
         <ul class="fail-list">
           <li v-for="item in failed" :key="item.id">
             <span class="fail-name">{{ item.username ?? '未知用户' }}</span>
@@ -68,7 +65,7 @@ async function copyAll(): Promise<void> {
 
       <template v-if="passwords.length > 0">
         <div class="pwd-head">
-          <span class="pwd-title">一次性新密码（关掉弹窗就再也查不回来）</span>
+          <span class="pwd-title">一次性新密码（仅显示一次）</span>
           <button class="btn-ghost mini" type="button" @click="copyAll">{{ copied ? '已复制' : '复制全部' }}</button>
         </div>
         <ul class="pwd-list">
@@ -78,7 +75,7 @@ async function copyAll(): Promise<void> {
           </li>
         </ul>
         <p v-if="copyError" class="alert-error">{{ copyError }}</p>
-        <p class="tip">这些账号下次登录会被强制改密码，请把对应密码转告本人。</p>
+        <p class="tip">请将对应密码转告本人。</p>
       </template>
 
       <div class="modal-actions">

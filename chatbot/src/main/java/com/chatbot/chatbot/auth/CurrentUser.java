@@ -8,8 +8,9 @@ package com.chatbot.chatbot.auth;
 /**
  * @param systemPrompt 该用户的系统提示词；ChatService 拿它拼 system 消息，
  *                     免得为了一个人设再查一次库（AuthInterceptor 本来就回表查了用户）。
+ * @param memoryEnabled 是否允许 AI 从对话中学习长期记忆；关闭后不抽取也不注入。
  */
-public record CurrentUser(Long id, String username, Integer role, String systemPrompt) {
+public record CurrentUser(Long id, String username, Integer role, String systemPrompt, boolean memoryEnabled) {
 
     /**
      * 管理端准入：管理员**或超级管理员**（{@code @RequireAdmin} 的判定口径）。

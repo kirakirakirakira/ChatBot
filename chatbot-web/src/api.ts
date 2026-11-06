@@ -199,6 +199,12 @@ export interface StreamHandlers {
   onDone?: (messageId?: number, usage?: MessageUsage) => void
   /** 后端通过 SSE error 事件报出的生成错误。 */
   onError?: (message: string) => void
+  /** Agent 正在分析 / 整理。 */
+  onAgentStatus?: (text: string) => void
+  /** 模型发起一次工具调用。 */
+  onToolCall?: (event: ChatStreamEvent) => void
+  /** 工具执行结束（成功或失败）。 */
+  onToolResult?: (event: ChatStreamEvent) => void
 }
 
 /**
@@ -355,6 +361,15 @@ function dispatchEvent(rawEvent: string, handlers: StreamHandlers): void {
       break
     case 'error':
       handlers.onError?.(event.content ?? '未知错误')
+      break
+    case 'agent_status':
+      handlers.onAgentStatus?.(event.content ?? '')
+      break
+    case 'tool_call':
+      handlers.onToolCall?.(event)
+      break
+    case 'tool_result':
+      handlers.onToolResult?.(event)
       break
   }
 }

@@ -65,12 +65,12 @@ async function submit(): Promise<void> {
 
       <label class="field">
         <span class="field-label">用户名</span>
-        <input v-model="username" class="field-input" type="text" autocomplete="off" placeholder="1~50 字" :disabled="submitting" autofocus />
+        <input v-model="username" class="field-input" type="text" autocomplete="off" :disabled="submitting" autofocus />
       </label>
 
       <label class="field">
         <span class="field-label">初始密码</span>
-        <input v-model="password" class="field-input" type="text" autocomplete="off" placeholder="6~64 位" :disabled="submitting" />
+        <input v-model="password" class="field-input" type="text" autocomplete="off" :disabled="submitting" />
       </label>
       <button class="btn-ghost form-hint-btn" type="button" :disabled="submitting" @click="generatePassword">生成随机密码</button>
 
@@ -88,8 +88,6 @@ async function submit(): Promise<void> {
           </select>
         </label>
       </div>
-
-      <p class="modal-tip">创建后对方即可用这个密码登录；之后可以随时在这里重置密码或禁用账号。</p>
 
       <div class="modal-actions">
         <button class="btn-ghost" type="button" :disabled="submitting" @click="emit('close')">取消</button>
@@ -116,10 +114,4 @@ async function submit(): Promise<void> {
   flex: 1;
 }
 
-.modal-tip {
-  margin: 2px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-muted);
-}
 </style>

@@ -1,6 +1,6 @@
 # Chatbot
 
-类 ChatGPT 的全栈 AI 聊天应用：Spring Boot 后端 + Vue 3 前端，支持多用户登录、多会话管理与 SSE 流式对话。
+类 ChatGPT 的全栈 AI 聊天应用：Spring Boot 后端 + Vue 3 前端，支持多用户登录、多会话管理、SSE 流式对话、AI 长期记忆、只读工具调用（站内博客搜索 / 文章读取 / 计算器）与多人博客。
 模型走阿里云百炼 DashScope（OpenAI 兼容接口），也可直连任何 OpenAI 兼容服务；未配 API Key 时自动降级为本地 Mock。
 
 > 架构 / 逐文件清单 / 数据库 / API 全表 / 核心流程 / 安全设计 / 已知限制见 [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)；
@@ -12,7 +12,7 @@
 | --- | --- |
 | 后端 | Java 26、Spring Boot 4.1.1、Spring Data JPA、MySQL 8 |
 | 前端 | Vue 3.5、TypeScript 6、Vite 8、vue-router 4、markdown-it + highlight.js + DOMPurify |
-| LLM | 百炼 DashScope（OpenAI 兼容）：流式输出、按请求选模型、思考预算、可选联网搜索、图片输入 |
+| LLM | 百炼 DashScope（OpenAI 兼容）：流式输出、按请求选模型、思考预算、可选联网搜索、图片输入、Agent 工具调用；跨会话 AI 记忆与长会话摘要 |
 
 ## 目录结构
 
@@ -49,7 +49,7 @@ npm install
 npm run dev                     # http://localhost:5173
 ```
 
-前端是 history 模式路由（`/chat`、`/admin/users`…），开发期 Vite 自带回退；**生产部署要让静态服务器把未命中路径回退到
+前端是 history 模式路由（`/chat`、`/blog`、`/admin/users`…），开发期 Vite 自带回退；**生产部署要让静态服务器把未命中路径回退到
 `index.html`**（nginx：`try_files $uri /index.html`），否则刷新深层 URL 会 404。
 
 ### 默认账号
@@ -71,6 +71,7 @@ npm run dev                     # http://localhost:5173
 | 文档 | 内容 |
 | --- | --- |
 | [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) | **架构事实源（改代码前先读）**：速览与检索速查、目录树与逐文件清单、分层与调用链、配置与环境变量、数据库、API 全表、核心流程、安全设计、开发命令、文档同步清单、扩展点、已知限制与踩坑 |
+| [REQUIREMENTS.md](REQUIREMENTS.md) | **需求基线（用户视角）**：用户能做什么、业务规则、非功能要求、验收场景、暂不提供与待确认问题 |
 | [chatbot/README.md](chatbot/README.md) | 后端契约：SSE 事件形状、思考转发、取消语义、错误响应体、关键配置取舍 |
 | [chatbot-web/README.md](chatbot-web/README.md) | 前端约定：Vite 代理、Node 版本、登录闸门、SSE 解析、组件地图 |
 

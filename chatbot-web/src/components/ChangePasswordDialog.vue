@@ -100,7 +100,6 @@ async function submit(): Promise<void> {
           class="field-input"
           type="password"
           autocomplete="current-password"
-          placeholder="当前正在使用的密码"
           :disabled="submitting"
           autofocus
         />
@@ -113,7 +112,6 @@ async function submit(): Promise<void> {
           class="field-input"
           type="password"
           autocomplete="new-password"
-          placeholder="6~64 位"
           :disabled="submitting"
         />
       </label>
@@ -125,12 +123,11 @@ async function submit(): Promise<void> {
           class="field-input"
           type="password"
           autocomplete="new-password"
-          placeholder="再输入一次新密码"
           :disabled="submitting"
         />
       </label>
 
-      <p class="modal-tip">改完密码后当前设备会自动续期，其他设备上的登录态会立即失效，需要重新登录。</p>
+      <p class="modal-tip">其他设备的登录态会立即失效。</p>
 
       <div class="modal-actions">
         <button v-if="!force" class="btn-ghost" type="button" :disabled="submitting" @click="close">取消</button>

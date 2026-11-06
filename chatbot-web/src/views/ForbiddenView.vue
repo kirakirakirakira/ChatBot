@@ -8,10 +8,7 @@ import { HOME_PATH } from '@/router/paths'
     <div class="status-card">
       <p class="status-code">403</p>
       <h1 class="status-title">这个模块需要管理员权限</h1>
-      <p class="status-text">
-        当前账号的角色是「{{ currentUser?.roleLabel ?? '未知' }}」。如果认为这是误判，
-        请让管理员在用户管理里调整你的角色。
-      </p>
+      <p class="status-text">当前角色：{{ currentUser?.roleLabel ?? '未知' }}</p>
       <RouterLink class="btn-primary status-action" :to="HOME_PATH">回到聊天</RouterLink>
     </div>
   </div>

@@ -27,6 +27,7 @@ public record UserVO(
         String email,
         String phone,
         String systemPrompt,
+        Boolean memoryEnabled,
         LocalDateTime lastLoginAt,
         LocalDateTime createdAt,
         Boolean mustChangePassword) {
@@ -39,7 +40,8 @@ public record UserVO(
     public static UserVO from(User user) {
         return new UserVO(user.getId(), user.getUsername(), user.getNickname(), user.getRole(),
                 Roles.label(user.getRole()), user.getStatus(), UserStatus.label(user.getStatus()),
-                user.getEmail(), user.getPhone(), user.getSystemPrompt(), user.getLastLoginAt(),
+                user.getEmail(), user.getPhone(), user.getSystemPrompt(),
+                Boolean.TRUE.equals(user.getMemoryEnabled()), user.getLastLoginAt(),
                 user.getCreatedAt(), Boolean.TRUE.equals(user.getMustChangePassword()));
     }
 }

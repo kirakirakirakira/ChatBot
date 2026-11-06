@@ -15,4 +15,10 @@ public interface LlmClient {
      * @param options 模型 / 思考开关 / 思考预算，见 {@link LlmCallOptions}
      */
     void streamChat(List<LlmMessage> messages, LlmCallOptions options, LlmStreamListener listener);
+
+    /**
+     * 非流式调用，供 Agent planner 使用：返回文本或一组 tool_calls。
+     * 只用于「决定下一步」的小调用；最终回答仍走 streamChat，保证逐字输出。
+     */
+    LlmTurn completeChat(List<LlmMessage> messages, LlmCallOptions options);
 }

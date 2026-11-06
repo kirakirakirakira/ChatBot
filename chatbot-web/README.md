@@ -1,6 +1,6 @@
 # chatbot-web 前端
 
-Chatbot 的 Vue 3 前端：登录闸门 + 会话侧边栏 + SSE 流式对话 + 平级功能模块（个人信息 / 用户管理 / 操作记录）。
+Chatbot 的 Vue 3 前端：登录闸门 + 会话侧边栏 + SSE 流式对话 + Agent 工具时间线 + AI 记忆管理 + 平级功能模块（博客 / 个人信息 / 用户管理 / 操作记录）。
 路由用 **vue-router 4**（history 模式）：URL 即模块，权限闸门在 `router/guards.ts`，外壳在 `layouts/AppShell.vue`。
 
 > 启动步骤见仓库根目录 [README.md](../README.md)，架构与组件清单见 [PROJECT_OVERVIEW.md](../PROJECT_OVERVIEW.md)。
@@ -34,8 +34,9 @@ npm run type-check   # vue-tsc --build，只跑类型检查
 |---|---|
 | `src/auth.ts` | `token` / `currentUser` 是模块级 `ref`，持久化到 `localStorage`；`isAuthenticated` / `isAdmin` / `isSuperAdmin` 是 computed；`displayName`（昵称优先、回退登录名）；`clearSession()` 清本地登录态 |
 | `src/api/client.ts` | **全站唯一传输层**：统一挂 `Authorization: Bearer`、统一处理 401；不 import router，避免循环依赖 |
-| `src/api.ts` | 聊天、登录与「管自己」的接口清单（含 `updateMyProfile` / `fetchMyStats` / `revokeMySessions`）+ SSE 读流；新的平级模块另开 `src/api/<模块>.ts`，只用 `client.ts` 的 `request()` |
+| `src/api.ts` | 聊天、登录与「管自己」的接口清单（含 `updateMyProfile` / `fetchMyStats` / `revokeMySessions`）+ SSE 读流；AI 记忆在 `src/api/memory.ts`，新的平级模块照样另开 `src/api/<模块>.ts`，只用 `client.ts` 的 `request()` |
 | `src/App.vue` | `RouterView` + 全局 watch：登录态一旦消失（401 / 主动退出 / 被禁用）就送回 `/login?next=` |
+| `src/api/memory.ts` | AI 记忆六个接口：列表 / 新增 / 编辑 / 删除 / 清空 / 总开关；目标用户固定走 `/users/me`，不接受 userId |
 | `src/router/guards.ts` | **权限闸门**：`beforeEach` 先 `await ensureSession()`（本地有 token 才问后端、且只问一次），再按 `meta.public` / `meta.requiresAdmin` 放行或跳 `/login?next=` / `/403` |
 | `src/session.ts` | `ensureSession()`：按页面加载缓存的一次性 token 有效性确认 |
 | `src/router/routes.ts` | **模块注册表**：加一个平级模块 = 加一条带 `meta.moduleId` 的记录，导航与守卫自动生效 |
@@ -51,6 +52,22 @@ npm run type-check   # vue-tsc --build，只跑类型检查
 消息历史是**游标分页**：`getMessages(id, {before, limit})` 只取最新一页（默认 50 条），还有更早消息时顶部显示「加载更早的消息」，点击后把上一页插到列表头部并补偿滚动位置（不补偿会把视口顶下去）。
 
 改密码成功后后端换发新 token（响应体是新的 `LoginResponse`），前端用它覆盖本地 token，当前会话不中断；改系统提示词不换 token（响应用户 `UserVO` 覆盖本地 `currentUser` 即可）。
+
+## AI 记忆
+
+- 入口在 `/profile` 的「AI 记忆」卡片：总开关 + 最近 3 条预览 + 「管理记忆」弹窗。
+- 开关走 `PUT /api/users/me/memory-settings`，返回整份 `UserVO`；前端用当前 token 调 `setSession(token, user)` 覆盖本地登录态，不换发 token。
+- 记忆 CRUD 走 `src/api/memory.ts`，全部是 `/api/users/me/memories`；后端只认 token 里的用户，别人的 id 返回 404。
+- 手动编辑会把来源改成「手动」，之后自动抽取不会再覆盖；用户删除 / 清空后，下一轮 `recentHistory()` 立即不再注入。
+- 记忆不改变 SSE 契约：`ChatEvent` 仍然只有 reasoning / delta / done / error，前端不需要新增事件分支。
+
+## Agent 工具时间线
+
+- `ChatEvent` 新增 `agent_status` / `tool_call` / `tool_result`；`api.ts` 的 `StreamHandlers` 对应新增三个可选回调。
+- `ChatView` 把工具步骤写进当前 `UiMessage.agentSteps`：`tool_call` 建 running 步骤，`tool_result` 回填 ok/error、summary、durationMs。
+- `AgentTimeline.vue` 在助手正文之前渲染：显示“正在分析…” / “搜索站内博客 → 找到 1 篇 → 完成”，参数可折叠查看。
+- 时间线只存在于当轮流式期间；工具日志已落库，但 MVP 没有历史重放接口，刷新后只保留最终回答。
+- 停止生成会 abort fetch，后端在下一步工具调用前检查取消；已完成的工具结果不会丢。
 
 ## SSE 流式解析
 
@@ -97,41 +114,48 @@ npm run type-check   # vue-tsc --build，只跑类型检查
       api/client.ts 传输层：fetch 封装、鉴权头、401 兜底（全站唯一一份）
       api.ts        聊天与登录接口、SSE 读流、消息分页参数
       api/userAdmin.ts  用户管理模块接口（/api/admin/users + /api/admin/audit）；新模块照这个开新文件
+      api/blog.ts       博客模块接口（/api/blog）：列表 / 我的文章 / 详情 / 新建 / 编辑 / 删除
       auth.ts       登录态：token / currentUser / isAdmin / displayName
       types.ts      类型定义，与后端 DTO / VO 一一对应
       session.ts    ensureSession()：本地 token 的一次性有效性确认
       router/       index / routes（模块注册表）/ guards（登录与角色闸门）/ paths
       layouts/      AppShell.vue：模块导航 + 内容区外壳
       lib/markdown.ts   markdown-it + highlight.js + DOMPurify
+      lib/format.ts     formatDateTime：ISO → YYYY-MM-DD HH:mm，空值显示 —
       data/openingSuggestions.ts  空状态开场建议题库：100 条 / 5 个领域；drawSuggestions() 洗牌发牌抽 3 条
       App.vue       RouterView + 掉登录态回登录页的全局 watch
       main.ts       入口：createApp(App).use(router).mount('#app')
       views/
         LoginView.vue   登录页（顶层路由，不在外壳里）
         ChatView.vue    聊天主界面：会话列表 + 消息区 + 输入框 + 思考 / 模型 / 思考强度 + 停止生成
-        ProfileView.vue 个人信息（/profile）：资料 + 账号信息 + 使用统计 + 安全区
+        ProfileView.vue 个人信息（/profile）：资料 + 账号信息 + 使用统计 + AI 记忆卡片（开关 / 预览 / 管理入口） + 安全区
+        blog/BlogListView.vue    博客列表（/blog）：全部 / 我的两个 tab + 分页
+        blog/BlogDetailView.vue  文章详情（/blog/:id）：Markdown 正文
+        blog/BlogEditorView.vue  写 / 编辑文章（/blog/new、/blog/:id/edit）：textarea + 预览
         admin/UsersView.vue  用户管理（/admin/users）：表格 + 筛选 + 分页 + 多选批量 + 操作弹窗
         admin/AuditView.vue  操作记录（/admin/audit）：只读审计列表
         ForbiddenView.vue /403；NotFoundView.vue 其余路径兜底
       components/
         ConversationSidebar.vue  会话列表：新建 / 删除 / 双击改名
-        MessageBubble.vue        消息气泡：助手走 Markdown，用户纯文本 + 图片缩略图 + 思考折叠 + 重新生成
+        MessageBubble.vue        消息气泡：助手走 Markdown，用户纯文本 + 图片缩略图 + 思考折叠 + Agent 时间线 + 重新生成
+        AgentTimeline.vue        Agent 工具步骤：规划状态 + 工具调用 + 结果摘要 + 耗时
         AttachmentThumb.vue      单图缩略图：有本地 url 直接用，只有 id 时 fetch 字节转 objectURL
         MarkdownContent.vue      Markdown 容器：代码高亮 + 复制按钮 + 流式光标
         ChangePasswordDialog.vue 修改密码；force 模式关不掉（管理员重置过密码）
         SystemPromptDialog.vue   系统提示词（人设），保存后下一条消息生效
+        MemoryDialog.vue         AI 记忆管理：列表 + 新增 / 编辑 / 删除 / 清空
         UserMenu.vue             顶栏头像下拉
-        ModuleNav.vue            左侧模块导航条（从 routes.ts 派生）+ 底部账号菜单
+        ModuleNav.vue            可折叠模块导航（默认 176px 显示图标+文字，可收到 56px；状态存 localStorage）+ 底部账号菜单
         common/ConfirmDialog.vue 通用二次确认；requireText 一致才点亮确认（删号用）
         admin/UserFormDialog.vue / ResetPasswordDialog.vue / BatchResetPasswordDialog.vue / BatchResultDialog.vue
-        icons/                   导航图标：IconChat / IconUser / IconUsers
+        icons/                   导航图标：IconChat / IconBook / IconUser / IconUsers
       assets/main.css
 
 新增页面 / 平级模块：`views/` 下加组件 + `router/routes.ts` 加一条记录。带 `meta.moduleId` / `title` / `icon` / `order` 会自动进左侧导航；带 `meta.requiresAdmin` 会自动拦成 `/403`，导航组件与守卫都不用改。
 
 ## 路由与部署
 
-- history 模式（URL 里没有 `#`）：`/login`、`/chat`、`/403`，其余落 404 页。
+- history 模式（URL 里没有 `#`）：`/login`、`/chat`、`/blog`、`/403`，其余落 404 页；博客子页面 `/blog/new`、`/blog/:id`、`/blog/:id/edit` 均为 `hidden`，不进左侧导航。
 - 开发期 Vite 自带回退；**生产部署必须让静态服务器把未命中路径回退到 `index.html`**（nginx：`try_files $uri /index.html`），否则访问或刷新 `/admin/users` 会拿到服务器 404。
 - 登录页是顶层路由，其余页面挂在 `layouts/AppShell.vue` 下：左侧 56px 模块导航 + 内容区。
 
@@ -142,6 +166,7 @@ npm run type-check   # vue-tsc --build，只跑类型检查
 - `UserVO.mustChangePassword=true` 时外壳弹**关不掉的改密框**，改完才能用任何模块。
 - 管理台视图懒加载，普通用户的 bundle 不含管理台代码。
 - `/profile` 是第一个不带 `requiresAdmin` 的平级模块，复用聊天页的 `ChangePasswordDialog` / `SystemPromptDialog`。
+- `/blog` 是第二个不带 `requiresAdmin` 的平级模块：`meta.moduleId=blog` + `order=30` 自动进导航；详情 / 编辑器是它的隐藏子页面。正文渲染一律复用 `MarkdownContent`（`html:false` + DOMPurify），**不要用 v-html 直接渲染用户输入**。
 - 用户管理的勾选**只限当前页**，翻页 / 搜索 / 刷新即清空；批量结果逐条摊开（失败带后端中文原因），「成功 3 / 失败 1」是正常结果。
 - 角色层级决定「谁能管谁」：列表每行带 `canManage`，为 false 或是自己时角色下拉换成纯文本、按钮全部 disabled。指派用的角色下拉取 `/options` 的 `roles`（已按操作者层级过滤），列表的**筛选器**取 `allRoles`（全量）——筛选是读操作，看得见就该筛得出。
 - 操作审计是全管理端共用的表：新模块的写操作在自己的事务里调 `AdminAuditService.record()`，界面统一在 `/admin/audit` 看。

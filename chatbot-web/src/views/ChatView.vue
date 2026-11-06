@@ -5,9 +5,10 @@ import AttachmentThumb from '@/components/AttachmentThumb.vue'
 import ConversationSidebar from '@/components/ConversationSidebar.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import SystemPromptDialog from '@/components/SystemPromptDialog.vue'
 import UserMenu from '@/components/UserMenu.vue'
-import type { AttachmentRef, CurrentUser, LoginResult, Message as MessagePageItem, UiMessage } from '@/types'
+import type { AgentStep, AttachmentRef, CurrentUser, LoginResult, Message as MessagePageItem, UiMessage } from '@/types'
 import type { StreamHandlers, StreamOptions } from '@/api'
 import { clearSession, currentUser, isAdmin, setSession, token } from '@/auth'
 import {
@@ -142,6 +143,9 @@ const fatalError = ref('')
 const showPasswordDialog = ref(false)
 /** 系统提示词（人设）弹窗：所有用户可见，改的是自己那份。 */
 const showPromptDialog = ref(false)
+/** 待删除的会话：null = 没弹确认框。存标题是为了在确认框里说清楚删的是哪一条。 */
+const deleteTarget = ref<{ id: number; title: string } | null>(null)
+const deletingConversation = ref(false)
 
 /** 新建对话的前提：没有选中对话，或选中的对话已经有消息。防止连点攒出一排空对话。 */
 const canCreateConversation = computed(() => activeId.value === null || messages.value.length > 0)
@@ -515,13 +519,22 @@ async function newConversation(): Promise<void> {
   }
 }
 
-async function removeConversation(id: number): Promise<void> {
-  if (!window.confirm('删除这个对话？全部消息将被删除，且无法恢复。')) {
+function askRemoveConversation(id: number): void {
+  const target = conversations.value.find((c) => c.id === id)
+  if (target) {
+    deleteTarget.value = { id: target.id, title: target.title }
+  }
+}
+
+async function confirmRemoveConversation(): Promise<void> {
+  const target = deleteTarget.value
+  if (target === null || deletingConversation.value) {
     return
   }
+  deletingConversation.value = true
   try {
-    await deleteConversation(id)
-    if (activeId.value === id) {
+    await deleteConversation(target.id)
+    if (activeId.value === target.id) {
       stopStreaming()
       activeId.value = null
       messages.value = []
@@ -537,6 +550,9 @@ async function removeConversation(id: number): Promise<void> {
     }
   } catch (e) {
     fatalError.value = errMsg(e)
+  } finally {
+    deletingConversation.value = false
+    deleteTarget.value = null
   }
 }
 
@@ -654,6 +670,7 @@ function streamHandlers(reply: UiMessage): StreamHandlers {
       scrollToBottom()
     },
     onDone: (messageId, usage) => {
+      reply.agentStatus = undefined
       if (messageId !== undefined) {
         reply.id = messageId
       }
@@ -666,7 +683,35 @@ function streamHandlers(reply: UiMessage): StreamHandlers {
       }
     },
     onError: (message) => {
+      reply.agentStatus = undefined
       reply.error = message
+    },
+    onAgentStatus: (text) => {
+      reply.agentStatus = text || undefined
+      scrollToBottom()
+    },
+    onToolCall: (event) => {
+      reply.agentStatus = undefined
+      const step: AgentStep = {
+        callId: event.callId ?? '',
+        tool: event.tool ?? '',
+        label: event.label ?? event.tool ?? '工具调用',
+        args: event.args ?? {},
+        status: 'running',
+      }
+      reply.agentSteps = [...(reply.agentSteps ?? []), step]
+      scrollToBottom()
+    },
+    onToolResult: (event) => {
+      reply.agentSteps = (reply.agentSteps ?? []).map((step) => step.callId === event.callId
+        ? {
+            ...step,
+            status: event.status === 'OK' ? 'ok' : 'error',
+            summary: event.summary,
+            durationMs: event.durationMs,
+          }
+        : step)
+      scrollToBottom()
     },
   }
 }
@@ -746,7 +791,7 @@ onBeforeUnmount(() => {
       :can-create="canCreateConversation"
       @select="selectConversation"
       @create="newConversation"
-      @remove="removeConversation"
+      @remove="askRemoveConversation"
       @rename="onRenameConversation"
     />
 
@@ -776,7 +821,6 @@ onBeforeUnmount(() => {
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
             </div>
             <h2 class="empty-title">今天想聊点什么？</h2>
-            <p class="empty-sub">选一个开场，或直接输入你的问题</p>
             <div class="chips">
               <button v-for="s in suggestions" :key="s" class="chip" type="button" @click="useSuggestion(s)">
                 {{ s }}
@@ -835,7 +879,7 @@ onBeforeUnmount(() => {
             v-model="input"
             class="composer-input"
             rows="1"
-            :placeholder="visionEnabled ? '输入消息，Enter 发送，Shift+Enter 换行；可直接粘贴 / 拖入图片' : '输入消息，Enter 发送，Shift+Enter 换行'"
+            placeholder="输入消息"
             @keydown="onKeydown"
             @paste="onPaste"
           ></textarea>
@@ -852,7 +896,7 @@ onBeforeUnmount(() => {
               <label
                 class="pill-toggle"
                 :class="{ on: thinkingOn }"
-                title="只对本条消息生效：开启后推理模型先思考再回答，首字更慢"
+                title="思考模式"
               >
                 <input v-model="thinkingOn" type="checkbox" :disabled="streaming" />
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
@@ -861,7 +905,7 @@ onBeforeUnmount(() => {
               <label
                 class="pill-toggle"
                 :class="{ on: searchOn }"
-                title="联网搜索：模型可检索实时网页内容（天气 / 新闻 / 股价）。按次计费，默认关"
+                title="联网搜索"
               >
                 <input v-model="searchOn" type="checkbox" :disabled="streaming" />
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9" /><path d="M3 12h18" /><path d="M12 3a15 15 0 0 1 0 18" /><path d="M12 3a15 15 0 0 0 0 18" /></svg>
@@ -891,7 +935,7 @@ onBeforeUnmount(() => {
                 v-model="thinkingBudgetSel"
                 class="pill-select"
                 :disabled="streaming || !thinkingOn"
-                title="思考预算：思维链 token 上限。思考模式关闭时不可选"
+                title="思考预算"
               >
                 <option v-for="c in THINKING_BUDGET_CHOICES" :key="c.value" :value="c.value">{{ c.label }}</option>
               </select>
@@ -917,8 +961,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
         </div>
-        <p class="composer-note">模型回答仅供参考，重要信息请自行核实</p>
-      </footer>
+       </footer>
     </main>
 
     <ChangePasswordDialog
@@ -931,6 +974,16 @@ onBeforeUnmount(() => {
       :initial="currentUser?.systemPrompt ?? ''"
       @close="showPromptDialog = false"
       @changed="onPromptChanged"
+    />
+    <ConfirmDialog
+      v-if="deleteTarget"
+      title="删除对话"
+      :text="'将删除「' + deleteTarget.title + '」及其全部消息，无法恢复。'"
+      confirm-label="删除"
+      danger
+      :busy="deletingConversation"
+      @close="deleteTarget = null"
+      @confirm="confirmRemoveConversation"
     />
   </div>
 </template>
@@ -1053,12 +1106,6 @@ onBeforeUnmount(() => {
   font-size: 22px;
   font-weight: 650;
   letter-spacing: 0.3px;
-}
-
-.empty-sub {
-  margin: 0 0 14px;
-  font-size: 13.5px;
-  color: var(--text-muted);
 }
 
 .chips {
@@ -1327,12 +1374,4 @@ onBeforeUnmount(() => {
   color: var(--danger);
 }
 
-.composer-note {
-  max-width: 760px;
-  margin: 8px auto 0;
-  text-align: center;
-  font-size: 11.5px;
-  color: var(--text-muted);
-  opacity: 0.75;
-}
 </style>

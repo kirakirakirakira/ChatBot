@@ -1,8 +1,8 @@
 -- 首次运行前执行一次：建库 + 建表（MySQL 8.0，utf8mb4 / utf8mb4_unicode_ci）。
--- 结构与 Hibernate ddl-auto=update 自动生成的结果一致；表结构的唯一事实源是实体类 entity.Conversation / Message / User，改实体后请同步这里。
+-- 结构与 Hibernate ddl-auto=update 自动生成的结果一致；表结构的唯一事实源是 entity/ 下的实体类，改实体后请同步这里。
 -- 脚本可重复执行：全部用 IF NOT EXISTS；ddl-auto=update 只补缺失的表和列，不会改动已存在的列。
 --
--- 建表顺序刻意是 sys_user → conversation → message：conversation.owner_id 外键指向 sys_user，
+-- 建表顺序刻意是 sys_user → user_memory → conversation → message → blog_post：user_memory.user_id / conversation.owner_id / blog_post.author_id 外键指向 sys_user，
 -- 反过来写会报 errno 150（引用了还不存在的表）。
 
 CREATE DATABASE IF NOT EXISTS chatbot DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   `username`             varchar(50)  NOT NULL,
   `password`             varchar(100) NOT NULL,
   `role`                 int          NOT NULL,
+  `memory_enabled`       tinyint(1)   NOT NULL DEFAULT 1,
   `status`               int          NOT NULL DEFAULT 0,
   `created_at`           datetime(6)  NOT NULL,
   `password_changed_at`  datetime(6)  DEFAULT NULL,
@@ -37,6 +38,54 @@ CREATE TABLE IF NOT EXISTS `sys_user` (
   UNIQUE KEY `uk_sys_user_username` (`username`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- AI 长期记忆（对应实体 UserMemory）。
+-- 和 sys_user.system_prompt 刻意分开：system_prompt 是用户手写的人设，自动抽取的事实不能污染它。
+-- kind 存字符串而不是 ENUM，新增类型不用 ALTER；source / status 用数字，原因同 sys_user.role。
+-- source_conversation_id / source_message_id 只做溯源，不加外键：删会话 / 消息不应该连坐删掉记忆。
+-- content_hash 是规范化内容的 SHA-256，和 user_id 组成唯一键，用来防自动抽取重复写入。
+CREATE TABLE IF NOT EXISTS `user_memory` (
+  `id`                     bigint       NOT NULL AUTO_INCREMENT,
+  `user_id`                bigint       NOT NULL,
+  `kind`                   varchar(16)  NOT NULL,
+  `content`                varchar(500) NOT NULL,
+  `content_hash`           char(64)     NOT NULL,
+  `source`                 tinyint      NOT NULL DEFAULT 0,
+  `confidence`             decimal(3,2) NOT NULL DEFAULT 1.00,
+  `status`                 tinyint      NOT NULL DEFAULT 0,
+  `source_conversation_id` bigint       DEFAULT NULL,
+  `source_message_id`      bigint       DEFAULT NULL,
+  `use_count`              int          NOT NULL DEFAULT 0,
+  `last_used_at`           datetime(6)  DEFAULT NULL,
+  `created_at`             datetime(6)  NOT NULL,
+  `updated_at`             datetime(6)  NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_user_memory_hash` (`user_id`, `content_hash`),
+  KEY `idx_user_memory_user_status_updated` (`user_id`, `status`, `updated_at`),
+  CONSTRAINT `fk_user_memory_user` FOREIGN KEY (`user_id`) REFERENCES `sys_user` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Agent 工具调用日志（对应实体 AgentToolCall）。
+-- 只做排查 / 审计 / 以后回放，不建外键：删会话或删用户由应用层显式清理，避免日志反过来挡住删除。
+-- arguments_json / result_json 存原始 JSON；回灌给模型的版本会在 AgentService 里按 agent.max-result-chars 截断。
+CREATE TABLE IF NOT EXISTS `agent_tool_call` (
+  `id`              bigint      NOT NULL AUTO_INCREMENT,
+  `conversation_id` bigint      NOT NULL,
+  `user_id`         bigint      NOT NULL,
+  `call_id`         varchar(64) NOT NULL,
+  `tool_name`       varchar(64) NOT NULL,
+  `arguments_json`  longtext    DEFAULT NULL,
+  `result_summary`  text        DEFAULT NULL,
+  `result_json`     longtext    DEFAULT NULL,
+  `status`          varchar(16) NOT NULL,
+  `error`           text        DEFAULT NULL,
+  `duration_ms`     int         DEFAULT NULL,
+  `created_at`      datetime(6) NOT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_agent_tool_call_id` (`call_id`),
+  KEY `idx_agent_tool_call_conversation` (`conversation_id`, `id`),
+  KEY `idx_agent_tool_call_user` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 会话（对应左侧会话列表的一项）
 -- owner_id NOT NULL：一个会话必须属于某个用户，没有「公共会话」。所有查询都带 owner_id 条件，
 --   查不到（不存在 or 是别人的）一律 404，见 ConversationService.requireOwned 的注释。
@@ -48,6 +97,9 @@ CREATE TABLE IF NOT EXISTS `conversation` (
   `title`      varchar(100) NOT NULL,
   `created_at` datetime(6)  NOT NULL,
   `updated_at` datetime(6)  NOT NULL,
+  `summary`    longtext      DEFAULT NULL,
+  `summary_up_to_message_id` bigint DEFAULT NULL,
+  `summary_updated_at`      datetime(6) DEFAULT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_conversation_owner_updated` (`owner_id`, `updated_at`),
   CONSTRAINT `fk_conversation_owner` FOREIGN KEY (`owner_id`) REFERENCES `sys_user` (`id`)
@@ -117,6 +169,27 @@ CREATE TABLE IF NOT EXISTS `admin_audit_log` (
   KEY `idx_audit_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 博客文章，对应实体 com.chatbot.chatbot.entity.BlogPost。
+-- 与会话相反，文章是**全站可读**的：列表不按 author_id 过滤，只有编辑 / 删除才校验作者。
+-- status 用 varchar(20) 而不是 ENUM：状态会随审批 / 下架 / 草稿增加，字符串列零迁移（message.role 吃过 ENUM 的亏）。
+-- summary 单独存：列表页只要摘要，不能为了截 120 字把 LONGTEXT 正文整篇拉出来。
+-- published_at 与 created_at 分开：列表按发布时间倒序，编辑不改变排序；草稿 / 待审的发布时间为 NULL。
+-- author_id 是 RESTRICT：删号时 AdminUserService 先按 author_id 删文章，再删用户行。
+CREATE TABLE IF NOT EXISTS `blog_post` (
+  `id`           bigint       NOT NULL AUTO_INCREMENT,
+  `author_id`    bigint       NOT NULL,
+  `title`        varchar(100) NOT NULL,
+  `summary`      varchar(200) DEFAULT NULL,
+  `content`      longtext     NOT NULL,
+  `status`       varchar(20)  NOT NULL,
+  `published_at` datetime(6)  DEFAULT NULL,
+  `created_at`   datetime(6)  NOT NULL,
+  `updated_at`   datetime(6)  NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_blog_status_published` (`status`, `published_at`),
+  KEY `idx_blog_author_created` (`author_id`, `created_at`),
+  CONSTRAINT `fk_blog_post_author` FOREIGN KEY (`author_id`) REFERENCES `sys_user` (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- 初始**超级管理员**：admin / admin（下面是字符串 admin 的 BCrypt 哈希，cost=10），role=2。
 -- 必须是超级管理员：层级规则下管理员管不到管理员，种子若只是管理员将永远造不出超级管理员。
 -- INSERT IGNORE + username 唯一索引保证脚本可重复执行，也不会把改过的密码覆盖回 admin。登录后请立刻换掉这个默认密码。
@@ -188,8 +261,8 @@ VALUES ('test_super', '$2a$10$5GosfNYckx.pqmr6U/JHauxCRq/mTJ51kO7EgXBA7Zhe.4CcBe
 -- 1) message.role 的取值集合由 Role 枚举决定（Hibernate 按字母序生成）。以后给 Role 加新值（例如 SYSTEM）时，
 --    已存在的库不会自动变更列类型，需要手工执行：
 --    ALTER TABLE `message` MODIFY `role` enum('ASSISTANT','SYSTEM','USER') NOT NULL;
--- 2) 删号已经是功能（DELETE /api/admin/users/{id}，级联删会话 / 消息 / 附件），但外键**仍然是 RESTRICT**：
---    级联是应用层按「附件 → 消息 → 会话 → 用户」的顺序显式删的（见 AdminUserService.delete），
+-- 2) 删号已经是功能（DELETE /api/admin/users/{id}，级联删会话 / 消息 / 附件 / 博客文章），但外键**仍然是 RESTRICT**：
+--    级联是应用层按「AI 记忆 → 附件 → 消息 → 会话 → 博客文章 → 用户」的顺序显式删的（见 AdminUserService.delete），
 --    不是数据库 ON DELETE CASCADE。别把这里的 RESTRICT 当成「还没做删号」的遗留，也别顺手改成 CASCADE：
 --    顺序写在代码里才能在删之前抓一份用户名快照进审计表（用户行一没，就再也认不出删的是谁了）。
 --
@@ -204,3 +277,26 @@ VALUES ('test_super', '$2a$10$5GosfNYckx.pqmr6U/JHauxCRq/mTJ51kO7EgXBA7Zhe.4CcBe
 -- ===== 已有库升级：2026-09-25「测试账号 + 种子账号自愈」 =====
 -- 不想跑上面那段 INSERT 的话，直接启动后端即可：SeedUserInitializer 会补齐缺失的测试账号，
 -- 并在「系统里一个启用的超级管理员都没有」时把种子账号（auth.default-admin-username，默认 admin）提回超级管理员。
+
+-- ===== 已有库升级：2026-11-06「博客文章」 =====
+-- 全新表，直接用上面的 CREATE TABLE IF NOT EXISTS；已有库启动时 ddl-auto=update 也会自动建表。
+-- 不需要 ALTER、不需要清数据。
+-- 上线后若要手工建（不想等启动期 DDL），把上面那段 `blog_post` 原样执行一遍即可。
+
+-- ===== 已有库升级：2026-11-06「AI 记忆 + 会话摘要」 =====
+-- sys_user.memory_enabled 是带 DEFAULT 的 NOT NULL 列，老账号自动视为开启：
+--   ALTER TABLE `sys_user`
+--     ADD COLUMN `memory_enabled` tinyint(1) NOT NULL DEFAULT 1 AFTER `role`;
+--
+-- conversation 三个可空列；老会话保持 NULL，等价于「没有摘要、按原逻辑只看最近历史」：
+--   ALTER TABLE `conversation`
+--     ADD COLUMN `summary` longtext DEFAULT NULL AFTER `updated_at`,
+--     ADD COLUMN `summary_up_to_message_id` bigint DEFAULT NULL AFTER `summary`,
+--     ADD COLUMN `summary_updated_at` datetime(6) DEFAULT NULL AFTER `summary_up_to_message_id`;
+--
+-- user_memory 是全新表，直接执行上面的 CREATE TABLE IF NOT EXISTS；
+-- 已有库启动时 ddl-auto=update 也会自动建表。
+
+-- ===== 已有库升级：2026-11-06「Agent 工具调用日志」 =====
+-- 全新表，直接执行上面的 CREATE TABLE IF NOT EXISTS；已有库启动时 ddl-auto=update 也会自动建表。
+-- 没有外键；删会话 / 删用户由 ConversationService / AdminUserService 显式清理。

@@ -147,52 +147,49 @@ const confirmMeta = computed(() => {
     case 'disable':
       return {
         title: '禁用账号',
-        text: '禁用后「' + s.user.username + '」立刻无法登录，已登录的会话在下一个请求时失效。可以随时再启用。',
+        text: '禁用后「' + s.user.username + '」将无法登录，可随时再启用。',
         confirmLabel: '禁用',
         requireText: '',
       }
     case 'revoke':
       return {
         title: '强制下线',
-        text: '踢掉「' + s.user.username + '」在所有设备上的登录态，不修改密码。',
+        text: '退出「' + s.user.username + '」在所有设备上的登录态，不修改密码。',
         confirmLabel: '强制下线',
         requireText: '',
       }
     case 'delete':
       return {
         title: '删除用户',
-        text: '将永久删除「' + s.user.username + '」以及其名下的全部会话、消息与图片附件，无法恢复。',
+        text: '将永久删除「' + s.user.username + '」及其全部会话、消息与图片附件，无法恢复。',
         confirmLabel: '永久删除',
         requireText: s.user.username,
       }
     case 'batch-disable':
       return {
         title: '批量禁用',
-        text: '将禁用选中的 ' + selectedCount.value + ' 个账号：他们立刻无法登录，已登录的会话在下一个请求时失效。可以随时再启用。\n'
-          + '若其中有人是「最后一个启用的管理员」，那一条会失败并在结果里说明原因。',
+        text: '将禁用选中的 ' + selectedCount.value + ' 个账号，可随时再启用。',
         confirmLabel: '禁用 ' + selectedCount.value + ' 个',
         requireText: '',
       }
     case 'batch-revoke':
       return {
         title: '批量强制下线',
-        text: '踢掉选中的 ' + selectedCount.value + ' 个账号在所有设备上的登录态，不修改密码，他们可以用原密码重新登录。',
+        text: '退出选中的 ' + selectedCount.value + ' 个账号在所有设备上的登录态，不修改密码。',
         confirmLabel: '强制下线 ' + selectedCount.value + ' 个',
         requireText: '',
       }
     case 'batch-delete':
       return {
         title: '批量删除',
-        text: '将永久删除选中的 ' + selectedCount.value + ' 个账号，以及他们名下的全部会话、消息与图片附件，无法恢复。\n'
-          + '这一步不可撤销，请输入选中数量以确认。',
+        text: '将永久删除选中的 ' + selectedCount.value + ' 个账号及其全部数据，无法恢复。',
         confirmLabel: '永久删除 ' + selectedCount.value + ' 个',
         requireText: String(selectedCount.value),
       }
     case 'batch-role':
       return {
         title: '批量改角色',
-        text: '把选中的 ' + selectedCount.value + ' 个账号的角色改成「' + s.roleLabel + '」，下一个请求就按新角色鉴权。\n'
-          + '不能指派层级不低于自己的角色，越界的那几条会失败并在结果里说明原因。',
+        text: '把选中的 ' + selectedCount.value + ' 个账号的角色改成「' + s.roleLabel + '」。',
         confirmLabel: '改成「' + s.roleLabel + '」',
         requireText: '',
       }
@@ -479,8 +476,8 @@ function formatTime(iso: string | null): string {
           <td>
             <span class="uname">{{ u.username }}</span>
             <span v-if="u.nickname" class="nick" :title="'昵称：' + u.nickname">{{ u.nickname }}</span>
-            <span v-if="u.id === myId" class="flag self" title="这是你自己：角色与信息都锁死">我</span>
-            <span v-if="u.mustChangePassword" class="flag" title="管理员重置过密码，本人还没改">待改密</span>
+            <span v-if="u.id === myId" class="flag self" title="当前账号">我</span>
+            <span v-if="u.mustChangePassword" class="flag">待改密</span>
           </td>
           <td>
             <!-- 锁死的行不渲染 select：下拉选项已按「只能指派低于自己的角色」过滤，

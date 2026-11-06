@@ -60,6 +60,13 @@ public class User {
     private String systemPrompt;
 
     /**
+     * 是否允许 AI 从对话中学习长期记忆。默认开启；关闭后不抽取、不注入，已有记忆保留。
+     * 初值写在 Java 侧，理由同下面的 status：Hibernate 插入时会把 null 显式写进 SQL。
+     */
+    @Column(name = "memory_enabled", nullable = false, columnDefinition = "tinyint(1) not null default 1")
+    private Boolean memoryEnabled = Boolean.TRUE;
+
+    /**
      * 账号状态，取值见 auth.UserStatus：0=启用，1=禁用。
      * 初值写在 Java 侧而不是只靠列 DEFAULT：Hibernate 插入时会把 null 显式写进 SQL，
      * 只靠数据库 DEFAULT 兜不住 NOT NULL，所以任何 new User() 的路径都得自带初值。
@@ -149,6 +156,14 @@ public class User {
 
     public void setSystemPrompt(String systemPrompt) {
         this.systemPrompt = systemPrompt;
+    }
+
+    public Boolean getMemoryEnabled() {
+        return memoryEnabled;
+    }
+
+    public void setMemoryEnabled(Boolean memoryEnabled) {
+        this.memoryEnabled = memoryEnabled;
     }
 
     public Integer getStatus() {

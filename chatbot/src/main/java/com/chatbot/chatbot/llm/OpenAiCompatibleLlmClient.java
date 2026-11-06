@@ -38,6 +38,73 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * 非流式 planner：请求体里带 tools，响应里解析 message.tool_calls。
+     * 这里刻意不解析流式 tool_calls 增量——那是另一个复杂度，MVP 先用非流式把闭环跑稳。
+     */
+    @Override
+    public LlmTurn completeChat(List<LlmMessage> messages, LlmCallOptions options) {
+        Map<String, Object> body = new HashMap<>();
+        body.put("model", options.model());
+        body.put("stream", false);
+        body.put("messages", messages);
+
+        Boolean thinking = (options.enableThinking() != null) ? options.enableThinking() : props.enableThinking();
+        if (thinking != null) {
+            body.put("enable_thinking", thinking);
+        }
+        if (options.maxTokens() != null) {
+            body.put("max_tokens", options.maxTokens());
+        }
+        if (options.tools() != null && !options.tools().isEmpty()) {
+            body.put("tools", options.tools().stream()
+                    .map(tool -> Map.<String, Object>of(
+                            "type", "function",
+                            "function", Map.<String, Object>of(
+                                    "name", tool.name(),
+                                    "description", tool.description(),
+                                    "parameters", tool.parameters() == null ? Map.of() : tool.parameters())))
+                    .toList());
+        }
+        if (options.toolChoice() != null && !options.toolChoice().isBlank()) {
+            body.put("tool_choice", options.toolChoice());
+        }
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(props.baseUrl() + "/chat/completions"))
+                .timeout(Duration.ofSeconds(Math.min(props.requestTimeoutSeconds(), 120)))
+                .header("Authorization", "Bearer " + props.apiKey())
+                .header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(objectMapper.writeValueAsString(body)))
+                .build();
+
+        try {
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                throw new IllegalStateException("LLM planner 返回 " + response.statusCode() + ": " + response.body());
+            }
+            CompletionResponse parsed = objectMapper.readValue(response.body(), CompletionResponse.class);
+            if (parsed.choices() == null || parsed.choices().isEmpty()
+                    || parsed.choices().get(0).message() == null) {
+                return new LlmTurn("", List.of());
+            }
+            AssistantMessage message = parsed.choices().get(0).message();
+            List<LlmToolCall> calls = message.toolCalls() == null
+                    ? List.of()
+                    : message.toolCalls().stream()
+                            .filter(call -> call.function() != null && call.function().name() != null)
+                            .map(call -> new LlmToolCall(
+                                    call.id(), call.function().name(), call.function().arguments()))
+                            .toList();
+            return new LlmTurn(message.content(), calls);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("LLM planner 请求被中断", e);
+        } catch (IOException e) {
+            throw new IllegalStateException("调用 LLM planner 失败: " + e.getMessage(), e);
+        }
+    }
+
     @Override
     public void streamChat(List<LlmMessage> messages, LlmCallOptions options, LlmStreamListener listener) {
         Map<String, Object> body = new HashMap<>();
@@ -152,5 +219,23 @@ public class OpenAiCompatibleLlmClient implements LlmClient {
     record Delta(
             @JsonProperty("reasoning_content") String reasoningContent,
             String content) {
+    }
+
+    /** 非流式 planner 的响应形状。 */
+    record CompletionResponse(List<CompletionChoice> choices, Usage usage) {
+    }
+
+    record CompletionChoice(AssistantMessage message) {
+    }
+
+    record AssistantMessage(
+            String content,
+            @JsonProperty("tool_calls") List<ToolCallPayload> toolCalls) {
+    }
+
+    record ToolCallPayload(String id, String type, FunctionCall function) {
+    }
+
+    record FunctionCall(String name, String arguments) {
     }
 }

@@ -6,6 +6,7 @@ import com.chatbot.chatbot.auth.UserStatus;
 import com.chatbot.chatbot.dto.ChangePasswordRequest;
 import com.chatbot.chatbot.dto.LoginRequest;
 import com.chatbot.chatbot.dto.LoginResponse;
+import com.chatbot.chatbot.dto.UpdateMemorySettingsRequest;
 import com.chatbot.chatbot.dto.UpdateProfileRequest;
 import com.chatbot.chatbot.dto.UpdateSystemPromptRequest;
 import com.chatbot.chatbot.dto.UserProfileStatsVO;
@@ -88,6 +89,18 @@ public class UserService {
 
     public UserVO me(CurrentUser currentUser) {
         return UserVO.from(requireUser(currentUser.id()));
+    }
+
+    /**
+     * 开关 AI 记忆。关闭后不抽取、不注入；已有记忆保留，用户重新打开即可恢复。
+     * 和目标用户 id 的来源规则一致：只认 token 里的 CurrentUser。
+     */
+    @Transactional
+    public UserVO updateMemorySettings(CurrentUser currentUser, UpdateMemorySettingsRequest request) {
+        User user = requireUser(currentUser.id());
+        user.setMemoryEnabled(request.enabled());
+        userRepository.save(user);
+        return UserVO.from(user);
     }
 
     /**

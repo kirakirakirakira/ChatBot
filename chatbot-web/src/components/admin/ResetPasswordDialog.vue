@@ -97,10 +97,8 @@ async function copy(): Promise<void> {
 
         <label v-if="mode === 'input'" class="field">
           <span class="field-label">新密码</span>
-          <input v-model="newPassword" class="field-input" type="text" autocomplete="off" placeholder="6~64 位" :disabled="submitting" />
+          <input v-model="newPassword" class="field-input" type="text" autocomplete="off" :disabled="submitting" />
         </label>
-
-        <p class="modal-tip">重置后该用户在所有设备上的登录态立即失效，且下次登录必须改密码。把新密码通过安全渠道交给对方。</p>
 
         <div class="modal-actions">
           <button class="btn-ghost" type="button" :disabled="submitting" @click="emit('close')">取消</button>
@@ -140,10 +138,4 @@ async function copy(): Promise<void> {
   letter-spacing: 0.4px;
 }
 
-.modal-tip {
-  margin: 2px 0 0;
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-muted);
-}
 </style>

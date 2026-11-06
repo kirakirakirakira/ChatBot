@@ -50,6 +50,23 @@ public class Conversation {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    /**
+     * 本会话较早内容的摘要。只给模型做上下文压缩用，不在聊天界面展示。
+     * null = 还没生成过，或者会话太短不需要摘要。
+     */
+    @Column(columnDefinition = "LONGTEXT")
+    private String summary;
+
+    /**
+     * 摘要已经覆盖到哪条消息 id。拼历史时 id <= 这个值的消息不再重复发给模型，
+     * 否则摘要和原文会一起进上下文，白烧 token。
+     */
+    @Column(name = "summary_up_to_message_id")
+    private Long summaryUpToMessageId;
+
+    @Column(name = "summary_updated_at")
+    private LocalDateTime summaryUpdatedAt;
+
     @PrePersist
     void onCreate() {
         this.createdAt = LocalDateTime.now();
@@ -92,5 +109,29 @@ public class Conversation {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public String getSummary() {
+        return summary;
+    }
+
+    public void setSummary(String summary) {
+        this.summary = summary;
+    }
+
+    public Long getSummaryUpToMessageId() {
+        return summaryUpToMessageId;
+    }
+
+    public void setSummaryUpToMessageId(Long summaryUpToMessageId) {
+        this.summaryUpToMessageId = summaryUpToMessageId;
+    }
+
+    public LocalDateTime getSummaryUpdatedAt() {
+        return summaryUpdatedAt;
+    }
+
+    public void setSummaryUpdatedAt(LocalDateTime summaryUpdatedAt) {
+        this.summaryUpdatedAt = summaryUpdatedAt;
     }
 }

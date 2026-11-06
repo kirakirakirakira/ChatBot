@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { fetchMyStats, revokeMySessions, updateMyProfile } from '@/api'
+import { fetchMemories, updateMemorySettings } from '@/api/memory'
 import ChangePasswordDialog from '@/components/ChangePasswordDialog.vue'
+import MemoryDialog from '@/components/MemoryDialog.vue'
 import SystemPromptDialog from '@/components/SystemPromptDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { clearSession, currentUser, displayName, setSession, token } from '@/auth'
-import type { CurrentUser, LoginResult, MyStats } from '@/types'
+import type { CurrentUser, LoginResult, MyStats, UserMemory } from '@/types'
 
 /**
  * 个人信息（/profile）——每个登录用户都能进的模块，不用管理员。
@@ -36,6 +38,11 @@ const showPasswordDialog = ref(false)
 const showPromptDialog = ref(false)
 const showRevokeConfirm = ref(false)
 const revoking = ref(false)
+
+const memories = ref<UserMemory[]>([])
+const memoryError = ref('')
+const memoryBusy = ref(false)
+const showMemoryDialog = ref(false)
 
 /** 资料草稿：从登录态里读一次，之后由用户改；保存成功后用后端回传的用户信息重新对齐。 */
 function syncDraft(user: CurrentUser | null): void {
@@ -78,10 +85,55 @@ async function loadStats(): Promise<void> {
   }
 }
 
+async function loadMemories(): Promise<void> {
+  memoryError.value = ''
+  try {
+    memories.value = await fetchMemories()
+  } catch (e) {
+    memoryError.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+/** 旧登录态里没有 memoryEnabled 字段时按开启处理，和后端默认值一致。 */
+const memoryEnabled = computed(() => currentUser.value?.memoryEnabled !== false)
+const memoryPreview = computed(() => memories.value.slice(0, 3))
+
 onMounted(() => {
   syncDraft(currentUser.value)
   void loadStats()
+  void loadMemories()
 })
+
+async function toggleMemory(): Promise<void> {
+  if (memoryBusy.value) {
+    return
+  }
+  memoryBusy.value = true
+  memoryError.value = ''
+  try {
+    const user = await updateMemorySettings(!memoryEnabled.value)
+    if (token.value) {
+      setSession(token.value, user)
+    }
+    if (user.memoryEnabled !== false) {
+      await loadMemories()
+    }
+    saveOk.value = user.memoryEnabled === false ? '已关闭 AI 记忆' : '已开启 AI 记忆'
+  } catch (e) {
+    memoryError.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    memoryBusy.value = false
+  }
+}
+
+function onMemoryChanged(): void {
+  void loadMemories()
+}
+
+function closeMemoryDialog(): void {
+  showMemoryDialog.value = false
+  void loadMemories()
+}
 
 async function save(): Promise<void> {
   if (saving.value || !dirty.value) {
@@ -182,19 +234,18 @@ function formatTime(iso: string | null | undefined): string {
           <label class="field">
             <span class="field-label">登录名</span>
             <input class="field-input" type="text" :value="currentUser?.username ?? ''" disabled />
-            <span class="field-hint">登录名不可修改：它是操作记录里「谁干的」的唯一锚点。</span>
           </label>
           <label class="field">
             <span class="field-label">昵称</span>
-            <input v-model="nickname" class="field-input" type="text" maxlength="50" placeholder="没填就显示登录名" :disabled="saving" />
+            <input v-model="nickname" class="field-input" type="text" maxlength="50" :disabled="saving" />
           </label>
           <label class="field">
             <span class="field-label">邮箱</span>
-            <input v-model="email" class="field-input" type="email" maxlength="100" placeholder="name@example.com" :disabled="saving" />
+            <input v-model="email" class="field-input" type="email" maxlength="100" :disabled="saving" />
           </label>
           <label class="field">
             <span class="field-label">手机号</span>
-            <input v-model="phone" class="field-input" type="tel" maxlength="30" placeholder="选填" :disabled="saving" />
+            <input v-model="phone" class="field-input" type="tel" maxlength="30" :disabled="saving" />
           </label>
           <div class="card-actions">
             <button class="btn-ghost" type="button" :disabled="saving || !dirty" @click="syncDraft(currentUser)">撤销改动</button>
@@ -215,7 +266,7 @@ function formatTime(iso: string | null | undefined): string {
               <dt>状态</dt>
               <dd>
                 {{ currentUser?.statusLabel ?? '启用' }}
-                <span v-if="currentUser?.mustChangePassword" class="flag" title="管理员重置过密码，本人还没改">待改密</span>
+                <span v-if="currentUser?.mustChangePassword" class="flag">待改密</span>
               </dd>
             </div>
             <div class="info-row">
@@ -239,7 +290,44 @@ function formatTime(iso: string | null | undefined): string {
                 <span class="stat-label">{{ s.label }}</span>
               </div>
             </div>
-            <p class="field-hint">统计的是你自己名下的数据，只有你和管理员在删号时才会碰到它。</p>
+          </div>
+        </section>
+
+        <section class="card">
+          <h2 class="card-title">AI 记忆</h2>
+          <div class="card-body">
+            <div class="memory-toggle-row">
+              <div class="memory-toggle-copy">
+                <span class="action-name">允许 AI 从对话中学习</span>
+              </div>
+              <button
+                class="switch"
+                :class="{ on: memoryEnabled }"
+                type="button"
+                role="switch"
+                :aria-checked="memoryEnabled"
+                :disabled="memoryBusy"
+                @click="toggleMemory"
+              >
+                <span class="switch-knob"></span>
+              </button>
+            </div>
+            <div v-if="memoryError" class="alert-error">{{ memoryError }}</div>
+            <template v-if="memoryEnabled">
+              <div v-if="memories.length > 0" class="memory-preview">
+                <div v-for="memory in memoryPreview" :key="memory.id" class="memory-line">
+                  <span class="memory-kind">{{ memory.kindLabel }}</span>
+                  <span class="memory-text">{{ memory.content }}</span>
+                </div>
+                <span v-if="memories.length > memoryPreview.length" class="memory-more">
+                  还有 {{ memories.length - memoryPreview.length }} 条
+                </span>
+              </div>
+              <p v-else class="field-hint">还没有记忆</p>
+            </template>
+            <div class="card-actions">
+              <button class="btn-ghost" type="button" @click="showMemoryDialog = true">管理记忆</button>
+            </div>
           </div>
         </section>
       </div>
@@ -249,15 +337,12 @@ function formatTime(iso: string | null | undefined): string {
         <div class="card-body action-list">
           <button class="action-row" type="button" @click="showPromptDialog = true">
             <span class="action-name">系统提示词（人设）</span>
-            <span class="action-desc">每轮对话都会作为 system 消息放在历史最前面，所有会话共用。</span>
           </button>
           <button class="action-row" type="button" @click="showPasswordDialog = true">
             <span class="action-name">修改密码</span>
-            <span class="action-desc">改完当前设备会自动换上新登录态，其他设备的登录态立刻失效。</span>
           </button>
           <button class="action-row danger" type="button" @click="showRevokeConfirm = true">
             <span class="action-name">退出所有设备</span>
-            <span class="action-desc">作废你在所有设备上的登录态（含当前这台），不改密码，之后用原密码重新登录。</span>
           </button>
         </div>
       </section>
@@ -270,10 +355,15 @@ function formatTime(iso: string | null | undefined): string {
       @close="showPromptDialog = false"
       @changed="onPromptChanged"
     />
+    <MemoryDialog
+      v-if="showMemoryDialog"
+      @close="closeMemoryDialog"
+      @changed="onMemoryChanged"
+    />
     <ConfirmDialog
       v-if="showRevokeConfirm"
       title="退出所有设备"
-      text="将作废你在所有设备上的登录态，包括当前这一台。密码不变，之后可以用原密码重新登录。"
+      text="将作废你在所有设备上的登录态，包括当前设备。"
       confirm-label="退出所有设备"
       :busy="revoking"
       danger
@@ -460,7 +550,7 @@ function formatTime(iso: string | null | undefined): string {
   color: var(--text-muted);
 }
 
-/* 安全区做成整行可点：这三项都只有一个动作，用「标题 + 说明」的大按钮比一排小按钮好点中 */
+/* 安全区做成整行可点：这三项都只有一个动作，大按钮比一排小按钮好点中 */
 .action-list {
   gap: 10px;
 }
@@ -488,17 +578,104 @@ function formatTime(iso: string | null | undefined): string {
   font-weight: 550;
 }
 
-.action-desc {
-  font-size: 12px;
-  line-height: 1.6;
-  color: var(--text-muted);
-}
-
 .action-row.danger .action-name {
   color: var(--danger);
 }
 
 .action-row.danger:hover {
   border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
+
+.memory-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.memory-toggle-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.switch {
+  flex: none;
+  position: relative;
+  width: 42px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-pill);
+  background: var(--panel-2);
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease;
+}
+
+.switch.on {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.switch:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 20%);
+  transition: transform 140ms ease;
+}
+
+.switch.on .switch-knob {
+  transform: translateX(18px);
+}
+
+.memory-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-m);
+  background: var(--panel-2);
+}
+
+.memory-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.memory-kind {
+  flex: none;
+  padding: 1px 7px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.memory-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+}
+
+.memory-more {
+  font-size: 11.5px;
+  color: var(--text-muted);
 }
 </style>

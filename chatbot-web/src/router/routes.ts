@@ -1,6 +1,7 @@
 import { markRaw } from 'vue'
 import type { RouteRecordRaw } from 'vue-router'
 import AppShell from '@/layouts/AppShell.vue'
+import IconBook from '@/components/icons/IconBook.vue'
 import IconChat from '@/components/icons/IconChat.vue'
 import IconUser from '@/components/icons/IconUser.vue'
 import IconUsers from '@/components/icons/IconUsers.vue'
@@ -68,6 +69,32 @@ export const routes: RouteRecordRaw[] = [
         name: 'profile',
         component: () => import('@/views/ProfileView.vue'),
         meta: { moduleId: 'profile', title: '个人信息', icon: markRaw(IconUser), order: 20 },
+      },
+      {
+        // 博客：所有登录用户都能看、都能写。只给 /blog 挂 moduleId，子页面全部 hidden，
+        // 否则左侧导航会为「写文章」「文章详情」各长出一个图标。
+        path: 'blog',
+        name: 'blog',
+        component: () => import('@/views/blog/BlogListView.vue'),
+        meta: { moduleId: 'blog', title: '博客', icon: markRaw(IconBook), order: 30 },
+      },
+      {
+        path: 'blog/new',
+        name: 'blog-new',
+        component: () => import('@/views/blog/BlogEditorView.vue'),
+        meta: { title: '写文章', hidden: true },
+      },
+      {
+        path: 'blog/:id',
+        name: 'blog-detail',
+        component: () => import('@/views/blog/BlogDetailView.vue'),
+        meta: { title: '文章', hidden: true },
+      },
+      {
+        path: 'blog/:id/edit',
+        name: 'blog-edit',
+        component: () => import('@/views/blog/BlogEditorView.vue'),
+        meta: { title: '编辑文章', hidden: true },
       },
       {
         // 第一个和聊天平级的功能模块。懒加载：普通用户不下载管理台代码。

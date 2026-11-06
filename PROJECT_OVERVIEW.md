@@ -8,12 +8,13 @@
 
 ---
 
-## 文档分工（四份，各写各的，不要互相复述）
+## 文档分工（五份，各写各的，不要互相复述）
 
 | 文档 | 定位 | 只写什么 |
 |---|---|---|
 | `README.md`（仓库根） | 门面 | 一句话简介 + **唯一的启动步骤** |
 | `PROJECT_OVERVIEW.md`（本文） | 架构事实源 | 目录结构、逐文件清单、模块职责、数据模型、API 全表、核心流程、设计决策、已知限制 |
+| `REQUIREMENTS.md`（仓库根） | 需求基线（用户视角） | 用户能做什么、业务规则、非功能要求、验收场景、暂不提供与待确认问题；不写接口、错误码和实现细节 |
 | `chatbot/README.md` | 后端契约 | SSE 事件形状与语义、思考转发原因、取消语义、错误响应体、配置取舍 |
 | `chatbot-web/README.md` | 前端约定 | Vite 代理、Node 版本、登录闸门、SSE 解析要点、组件地图 |
 
@@ -31,8 +32,8 @@
 | 仓库根 | `D:/workspace/chatbot`（两个平级子项目，**不是** Maven/npm 多模块工程，没有父 pom、没有 workspace） |
 | 后端 | `chatbot/`，Spring Boot 4.1.1 + Java 26 + Maven，包根 `com.chatbot.chatbot`，端口 **8089** |
 | 前端 | `chatbot-web/`，Vue 3.5 + TypeScript 6 + Vite 8，端口 **5173**，`/api` 代理到 8089 |
-| 数据库 | MySQL 8，库名 `chatbot`，共 **4 张表**：`sys_user` / `conversation` / `message` / `attachment`（图片字节直接存 LONGBLOB） |
-| LLM | `llm.api-key` 有值 → `OpenAiCompatibleLlmClient`；为空 → `MockLlmClient`（本地假回复，链路照样能跑通） |
+| 数据库 | MySQL 8，库名 `chatbot`，共 **7 张表**：`sys_user` / `conversation` / `message` / `attachment`（图片字节直接存 LONGBLOB）/ `blog_post` / `user_memory` / `agent_tool_call`（工具调用日志） |
+| LLM | `llm.api-key` 有值 → `OpenAiCompatibleLlmClient`；为空 → `MockLlmClient`（本地假回复，链路照样能跑通）。支持 Agent planner：工具定义随请求下发，模型返回 `tool_calls` 后由后端执行 |
 | 鉴权 | 自签 HMAC-SHA256 token（不用 JWT 库、不用 Spring Security starter），白名单**只有** `POST /api/auth/login` |
 | 默认账号 | `admin` / `admin`，**超级管理员**（`sql/init.sql` 的 `INSERT IGNORE` 与 `SeedUserInitializer` 二选一兜底创建；种子必须是超管，理由见 8.6）。另有**每个角色一个测试账号**：`test_super` / `test_admin` / `test_user` / `test_guest`，密码统一 `test123456`（`auth.seed-test-users=false` 或 `AUTH_SEED_TEST_USERS=false` 关掉），层级权限「谁能管谁」只有四个不同角色的账号同时在库里才点得出来 |
 
@@ -42,8 +43,8 @@
 - 没有 `axios`：全部用原生 `fetch`。
 - 没有 `spring-boot-starter-security`：只引了 `spring-security-crypto` 拿 BCrypt。
 - 没有 WebSocket：流式回复用 SSE（`SseEmitter`）。
-- 没有 offset 分页 / 跳页：消息列表是**游标式**分页（只能一页一页往前翻，聊天界面也只需要往前翻）；会话列表与用户列表仍全量查询。
-- 没有单元测试：`src/test` 下只有一个空的 `contextLoads()`，而且要真 MySQL 才跑得起来；SSE 链路只能靠 `chatbot/README.md` 里的 curl 命令手测。
+- 没有统一分页：消息列表是**游标式**（只能一页一页往前翻，聊天界面也只需要往前翻）；管理台与博客列表用 `PageVO` 的 offset 分页（带总数和页码）；会话列表仍全量查询。
+- 自动化测试覆盖 `MemoryText` 纯函数、`ConversationSummaryStore` 写库、`AgentToolCallStore` 写库、`CalculatorTool` 与 `SearchBlogTool`；`contextLoads()` 与 DB 测试都要真 MySQL。SSE、真实 LLM 工具选择仍靠手测。
 
 **检索入口速查**（想改 X → 直接看 Y）：
 
@@ -52,7 +53,8 @@
 | 加/改一个 REST 接口 | `chatbot/src/main/java/com/chatbot/chatbot/controller/` + 对应 `service/` + `dto/`，前端再改 `chatbot-web/src/api.ts` |
 | 改 SSE 事件形状 | `dto/ChatEvent.java`（后端产出）+ `chatbot-web/src/api.ts` 的 `dispatchEvent()` + `types.ts` 的 `ChatStreamEvent` |
 | 改登录/权限 | `auth/` 整个包 + `config/WebConfig.java`（白名单在这里）+ 前端 `src/auth.ts`、`src/App.vue` |
-| 改表结构 | `entity/` 四个实体类（**唯一事实源**）→ 同步 `chatbot/sql/init.sql` |
+| 改表结构 | `entity/` 下的实体类（**唯一事实源**）→ 同步 `chatbot/sql/init.sql` |
+| 改博客 / 加审批 | 后端 `service/BlogPolicy.java`（发布状态唯一入口）+ `BlogService.java` + `controller/BlogController.java`；前端 `views/blog/` + `api/blog.ts` |
 | 改图片上传 / 多模态 | 后端 `service/AttachmentService.java` + `entity/Attachment.java` + `llm/LlmContentPart.java`；前端 `components/AttachmentThumb.vue` + `ChatView.vue` 的 `pending` 状态 |
 | 换模型/换服务商 | `chatbot/src/main/resources/application.properties` 的 `llm.*` + `llm/LlmProperties.java` |
 | 改 LLM 请求体/解析 | `llm/OpenAiCompatibleLlmClient.java` |
@@ -60,6 +62,7 @@
 | 改界面配色/圆角/间距 | `chatbot-web/src/assets/main.css`（CSS 变量 + 登录/弹窗共用件），组件内 `<style scoped>` |
 | 改聊天主界面行为 | `chatbot-web/src/views/ChatView.vue`（前端最大的文件，约 1338 行） |
 | 加配置项 | `application.properties` → 对应 `*Properties` record（`AuthProperties` / `LlmProperties`）→ 第五节表格 |
+| 改 AI 记忆 / 记忆注入 | 后端 `service/MemoryService.java`（手动 CRUD / Prompt 加载）+ `MemoryExtractionService.java`（异步抽取）+ `ConversationSummaryService.java`（摘要）+ `entity/UserMemory.java`；前端 `views/ProfileView.vue` + `components/MemoryDialog.vue` + `api/memory.ts` |
 | 改个人资料 / 个人信息页 | 后端 `controller/UserController.java` + `service/UserService.java` + `dto/UpdateProfileRequest.java`；前端 `views/ProfileView.vue` + `api.ts` 的 `updateMyProfile()` / `fetchMyStats()` / `revokeMySessions()` |
 | 改管理台批量操作 | 后端 `service/AdminUserBatchService.java`（逐条事务的编排）+ `dto/BatchUser*.java`；前端 `views/admin/UsersView.vue` 的勾选与批量条 + `components/admin/BatchResetPasswordDialog.vue` / `BatchResultDialog.vue` |
 | 改端口/代理 | 后端 `application.properties` 的 `server.port`，前端 `chatbot-web/vite.config.ts` 的 `server.proxy` |
@@ -110,17 +113,20 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 │       ├── main/java/com/chatbot/chatbot/
 │       │   ├── ChatbotApplication.java
 │       │   ├── auth/           # 8 个文件：token 签发校验 + 拦截器 + 当前用户注入 + 角色 + 账号状态
-│       │   ├── config/         # 6 个文件：Web/CORS、BCrypt、LLM Bean、种子账号（超管自愈 + 测试账号）、全局异常
-│       │   ├── controller/     # 8 个文件：Auth / Conversation / Chat / User / Llm / Attachment / AdminUser / AdminAudit
-│       │   ├── dto/            # 29 个文件：请求体、响应 VO、SSE 事件、统一错误体、管理端 PageVO/AdminUserVO/AdminAuditLogVO、批量 BatchUser*、个人资料 UpdateProfileRequest/UserProfileStatsVO 等
-│       │   ├── entity/         # 7 个文件：User / Conversation / Message / Attachment / Role / AdminAuditLog / AuditAction
-│       │   ├── llm/            # 8 个文件：客户端抽象 + OpenAI 兼容实现 + Mock + 配置 + 调用选项 + 多模态 content 段
-│       │   ├── repository/     # 6 个文件：Spring Data JPA 接口 + UserSpecifications（Criteria 查询条件）
-│       │   └── service/        # 7 个文件：Chat / Conversation / User / Attachment / AdminUser / AdminAudit / AdminUserBatch 七个 Service
+│       │   ├── config/         # 9 个文件：Web/CORS、BCrypt、LLM Bean、AI 记忆配置、Agent 配置、种子账号、全局异常
+│       │   ├── controller/     # 10 个文件：Auth / Conversation / Chat / User / UserMemory / Llm / Attachment / AdminUser / AdminAudit / Blog
+│       │   ├── dto/            # 37 个文件：请求体、响应 VO、SSE 事件、统一错误体、管理端 PageVO/AdminUserVO/AdminAuditLogVO、批量 BatchUser*、个人资料、博客、AI 记忆 UserMemoryVO/CreateMemoryRequest/UpdateMemoryRequest/UpdateMemorySettingsRequest 等
+│       │   ├── entity/         # 14 个文件：User / Conversation / Message / Attachment / Role / AdminAuditLog / AuditAction / BlogPost / PostStatus / UserMemory / MemoryKind / MemorySource / MemoryStatus / AgentToolCall
+│       │   ├── llm/            # 11 个文件：客户端抽象 + OpenAI 兼容实现 + Mock + 配置 + 调用选项 + 多模态 content 段 + LlmTool / LlmToolCall / LlmTurn
+│       │   ├── repository/     # 9 个文件：Spring Data JPA 接口 + UserMemoryRepository + AgentToolCallRepository + UserSpecifications（Criteria 查询条件）
+│       │   ├── service/        # 21 个文件：聊天 / 会话 / 用户 / 附件 / 管理 / 博客 / 记忆 + AgentService / AgentObserver / AgentToolCallStore + LlmText / UtilityModel / ExtractedMemory 等
+│       │   └── tool/           # 7 个文件：Tool 接口 / ToolContext / ToolResult / ToolRegistry + search_blog / get_blog_post / calculator
 │       ├── main/resources/
 │       │   ├── application.properties          # 主配置（提交进仓库）
 │       │   └── application-local.properties    # 本地真实密钥（gitignore）
-│       └── test/java/com/chatbot/chatbot/ChatbotApplicationTests.java
+│       └── test/java/com/chatbot/chatbot/
+│           ├── ChatbotApplicationTests.java   # 空 contextLoads（需真 MySQL）
+│           └── service/ + tool/               # MemoryTextTest / ConversationSummaryStoreTest / AgentToolCallStoreTest / CalculatorToolTest / SearchBlogToolTest
 │
 └── chatbot-web/                # ← 前端：Vue 3 + Vite + TypeScript
     ├── package.json / package-lock.json
@@ -135,14 +141,14 @@ chatbot/                        # 仓库根（git 仓库在这一层）
         ├── router/             # index / routes（模块注册表）/ guards（登录与角色闸门）/ paths
         ├── layouts/            # AppShell.vue：模块导航 + 内容区外壳
         ├── api.ts              # 聊天与登录的接口清单（传输层已抽到 api/client.ts）
-        ├── api/                # client.ts：传输层（全站唯一一份）；userAdmin.ts：用户管理模块接口
+        ├── api/                # client.ts：传输层（全站唯一一份）；userAdmin.ts：用户管理；blog.ts：博客；memory.ts：AI 记忆
         ├── auth.ts             # 登录态（模块级 ref + localStorage）
         ├── types.ts            # 与后端 DTO/VO 一一对应的类型
         ├── assets/main.css     # 全局 CSS 变量 + 登录/弹窗共用件
-        ├── lib/                # markdown.ts：markdown-it + highlight.js + DOMPurify
+        ├── lib/                # markdown.ts：markdown-it + highlight.js + DOMPurify；format.ts：日期展示
         ├── data/               # openingSuggestions.ts：空状态开场建议题库（100 条 / 5 个领域）
-        ├── views/              # LoginView、ChatView、ProfileView（个人信息，懒加载）、admin/UsersView（用户管理，懒加载）、ForbiddenView、NotFoundView
-        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、AttachmentThumb、ChangePasswordDialog、SystemPromptDialog、UserMenu、ModuleNav、common/ConfirmDialog、admin/（含批量重置密码 / 批量结果两个弹窗）、icons/（含 IconUser）
+        ├── views/              # LoginView、ChatView、ProfileView（个人信息，懒加载）、blog/（博客列表 / 详情 / 编辑器）、admin/UsersView（用户管理，懒加载）、ForbiddenView、NotFoundView
+        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、AttachmentThumb、AgentTimeline、ChangePasswordDialog、SystemPromptDialog、MemoryDialog、UserMenu、ModuleNav、common/ConfirmDialog、admin/、icons/
 ```
 
 ### 2.2 后端逐文件清单
@@ -162,7 +168,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `TokenService.java` | token 的签发与校验。格式 `base64url(payloadJson) + "." + base64url(HMAC-SHA256签名)`，思路同 JWT HS256 但不引 JWT 库，只用 JDK `Mac` + Jackson。内部 record `TokenPayload(long uid, String username, int role, long iat, long exp)`；`iat`/`exp` 用 **epoch 毫秒**（秒级精度分不开「改密码那一秒签发的旧 token」）。密钥短于 `MIN_SECRET_LENGTH = 32` 字符时**构造函数直接抛异常、后端启动失败**。签名比较用 `MessageDigest.isEqual` 常量时间比对。对外方法：`issue(User)`、`verify(String)`、`ttlSeconds()`。 |
 | `AuthInterceptor.java` | `HandlerInterceptor.preHandle`。① 非 `HandlerMethod`（CORS 预检、静态资源、404）直接放行；② 只认 `Authorization: Bearer <token>`，**不做 `?token=` 兜底**（会进访问日志）；③ `TokenService.verify()` 校签名与有效期；④ **回表查一次用户**（`userRepository.findById`），让删号/改角色/改密码/禁用立刻生效；⑤ `UserStatus.isEnabled(user.status)` 为假 → 401「账号已被禁用」（**禁用因此立刻生效，不用等 token 过期**）；⑥ 比较 `payload.iat()` 与 `user.passwordChangedAt`（都转 epoch 毫秒），旧 token 作废；⑦ `@RequireAdmin` 检查（方法级或类级注解）；⑧ 把 `CurrentUser` 放进 request attribute，key = 常量 `CURRENT_USER_ATTRIBUTE = "chatbot.currentUser"`。401 与 403 都抛 `ResponseStatusException`。 |
 | `AuthProperties.java` | `@ConfigurationProperties(prefix = "auth")` 的 record：`tokenSecret`、`tokenTtlHours`(默认12)、`defaultAdminUsername`(默认 admin)、`defaultAdminPassword`(默认 admin)、`seedTestUsers`(默认 true)、`testUserPassword`(默认 test123456)。由 `AuthConfig` 上的 `@EnableConfigurationProperties` 启用。后两项只服务于 `SeedUserInitializer` 的测试账号补齐。 |
-| `CurrentUser.java` | record `(Long id, String username, Integer role)` + `isAdmin()`。**刻意不用 ThreadLocal**：`/chat` 是 SSE 异步接口，请求线程与生成线程不是同一个。 |
+| `CurrentUser.java` | record `(Long id, String username, Integer role, String systemPrompt, boolean memoryEnabled)` + `isAdmin()`。`memoryEnabled` 让 `ChatService` 不用为了开关再查一次库。**刻意不用 ThreadLocal**：`/chat` 是 SSE 异步接口，请求线程与生成线程不是同一个。 |
 | `CurrentUserArgumentResolver.java` | `HandlerMethodArgumentResolver`，让控制器方法直接声明 `CurrentUser` 形参。从 request attribute 取；取不到抛 401（兜底，正常走不到）。 |
 | `RequireAdmin.java` | 注解，`@Target({TYPE, METHOD})` + `RUNTIME`。权限判断统一在 `AuthInterceptor`，不在业务层重复。 |
 | `Roles.java` | 角色常量 + **层级模型**：`USER=0`、`ADMIN=1`、`SUPER_ADMIN=2`、`GUEST=3`（访客：应用内权限同普通用户，只是层级最低，作「降权但不禁用」的承接位）；`rank(Integer)` 给管理层级（超管 3 > 管理员 2 > 普通用户 1 > 访客 0，**与 code 解耦**），`canAccessAdmin()` 是 `@RequireAdmin` 的判定（管理员或超管），`knownByRankDesc()` / `isKnown()` / `label()`。`sys_user.role` 存 **int 而非字符串/ENUM**，加角色不用改列类型。 |
@@ -188,6 +194,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `AttachmentController.java` | `/api/attachments` | `GET /{id}` → 图片字节（`Content-Type` = 存的 mime + `X-Content-Type-Options: nosniff`）。**没有类级 `@RequestMapping`**：只有一个方法、且路径不在 `/api/conversations` 下 |
 | `ChatController.java` | `/api/conversations` | `POST /{id}/chat`，`produces = TEXT_EVENT_STREAM_VALUE`，`@Valid ChatRequest` + `CurrentUser` → `SseEmitter`。**CurrentUser 必须在进 service 之前解析**：生成跑在虚拟线程上，那里拿不到 request attribute，补不了归属校验 |
 | `LlmController.java` | `/api/llm` | `GET /options`（→ `LlmOptionsVO`）。默认受保护：模型清单不敏感，但没必要在未登录时暴露部署用了哪些模型 |
+| `BlogController.java` | `/api/blog` | `GET /posts?page=&size=`（已发布列表 → `PageVO<BlogPostSummaryVO>`）、`GET /posts/{id}`（详情；未发布只有作者能看，其他人 404）、`POST /posts`（201，状态由 `BlogPolicy` 决定）、`PUT /posts/{id}`（只能改自己的，否则 404）、`DELETE /posts/{id}`（只能删自己的，204）、`GET /mine`（自己的全部状态 → `PageVO<BlogPostSummaryVO>`）。每个写方法都声明 `CurrentUser`，归属校验在 `BlogService`。 |
 | `UserController.java` | `/api/users` | 只剩「管自己」：`PUT /me/password`（→ 新 `LoginResponse`）、`PUT /me/system-prompt`（→ `UserVO`，**不换发 token**）、`PUT /me/profile`（昵称/邮箱/手机号 → `UserVO`，同样不换发 token）、`GET /me/stats`（自己的会话/消息/附件计数）、`POST /me/revoke`（204，作废自己**全部**登录态、含当前这个）。「管别人」的全部在 `AdminUserController`。原来的 `GET`（管理员列表）已删：唯一调用方是只读弹窗，被 `/admin/users` 页面取代。 |
 
 > 注意：会话类控制器（`ConversationController` / `ChatController` / `AttachmentController`）**每个方法都声明 `CurrentUser` 形参**，归属校验统一在 service 层，查不到或不是自己的一律 404（理由见第九节）。2026-09-24 之前的旧文档写「没有 `CurrentUser` 形参」，那是会话隔离落地前的状态，已修正（见 13.3）。
@@ -204,6 +211,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `ChatEvent.java` | SSE 事件体 `(type, content, messageId, model, promptTokens, completionTokens, reasoningTokens)` + `@JsonInclude(NON_NULL)`。静态工厂：`reasoning(content)` / `delta(content)` / `done(saved)`（把入库消息的模型与用量一起带上）/ `error(content)`。**错误文案在 `content`，不是 `message` 字段。** |
 | `UserVO.java` | `(id, username, nickname, role, roleLabel, status, statusLabel, email, phone, systemPrompt, lastLoginAt, createdAt, mustChangePassword)`。**没有 password 字段**：BCrypt 哈希也不能出网。`roleLabel` / `statusLabel` 由后端 `Roles.label()` / `UserStatus.label()` 给出，前端不维护映射。`mustChangePassword` 是给「刚认证的这个会话」的指令（登录与 `/me` 都带）。nickname / email / phone / status / lastLoginAt 是 2026-09-25 为「个人信息」页加的：一屏展示完自己的账号情况，不值得为几个字段再开一个接口。 |
 | `AdminUserVO.java` 等 9 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword` / **`canManage`（当前操作者能不能管这一行，前端据此锁控件）**，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典：`roles` 是**可指派**的角色，按操作者层级过滤；`allRoles` 是全量角色，只给列表筛选器用）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult` / `AdminAuditLogVO`（审计行，`actionLabel` 中文由 `AuditAction.label()` 给）、`UpdateProfileRequest`（昵称/邮箱/手机号，全空白 = 清空；**刻意不含 username 与 role**）、`UserProfileStatsVO`（三个计数）、批量三件套 `BatchUserAction`（枚举，请求体用 String 接再 `of()` 解析，为的是中文 400）/ `BatchUserRequest`（`ids` 1~100 + 一个动作 + 可选 role/newPassword/generate）/ `BatchUserResultVO`（逐条结果：`requested/succeeded/failed/items`，item 带失败原因与一次性随机密码）。 |
+| `BlogPostSummaryView.java` / `BlogPostSummaryVO.java` / `BlogPostVO.java` / `SaveBlogPostRequest.java` | 博客四件套。`BlogPostSummaryView` 是列表的**接口投影**：只取标题 / 摘要 / 作者名 / 状态 / 时间，**不取 content**，JPQL 里用 `case when` 做「昵称优先、回退用户名」；`BlogPostSummaryVO` 再把 `PostStatus` 转成 `status` + 中文 `statusLabel`。`BlogPostVO` 是详情（多 `content`），`SaveBlogPostRequest` 校验标题 ≤100、摘要 ≤200、正文 ≤50000。 |
 | `ConversationVO.java` | `(id, title, createdAt, updatedAt)` |
 | `MessageVO.java` | `(id, role小写字符串, content, reasoning, model, promptTokens, completionTokens, reasoningTokens, attachments, createdAt)`。`attachments` 是 `List<AttachmentVO>`，**没图时传 null 而不是空数组**（NON_NULL 会把整个字段省掉）。record 上 `@JsonInclude(NON_NULL)`：没有的字段干脆不下发 |
 | `RenameConversationRequest.java` | `(title)`，`@NotBlank` + `@Size(max=100)`（100 是 `conversation.title` 列宽） |
@@ -222,6 +230,8 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `Conversation.java` | `conversation` | `id`、`owner`（`@ManyToOne` LAZY 非空，`@JoinColumn(name="owner_id")`，外键名 `fk_conversation_owner`）、`title`(非空,100)、`createdAt`、`updatedAt`。表上 `@Index idx_conversation_owner_updated(owner_id, updated_at)` 服务「按用户查列表 + updated_at 倒序」这一条查询。取单个会话只走 `ConversationRepository.findByIdAndOwnerId`，**直接用 findById 就是越权** |
 | `Message.java` | `message` | `id`、`conversation`(`@ManyToOne` LAZY, 非空)、`role`(`@Enumerated(STRING)`, 长度16)、`content`(LONGTEXT)、`reasoning`(可空 LONGTEXT，思考全文)、`model`(varchar 64，回答用的模型)、`promptTokens` / `completionTokens` / `reasoningTokens`(可空 int，用量；拿不到就 NULL，不填 0 冒充真实值)、`createdAt` |
 | `Attachment.java` | `attachment` | 图片附件：`id`、`conversation`(`@ManyToOne` LAZY 非空，外键 `fk_attachment_conversation`，**RESTRICT**)、`messageId`(可空 Long，**刻意不做 `@ManyToOne`**：附件先于消息存在；NULL = 传了还没发出去的孤儿)、`mime`(白名单 5 种)、`fileName`、`sizeBytes`(列名带 `_bytes`：JPQL 里 `size` 是保留函数名)、`data`(`LONGBLOB`)、`createdAt`。一个附件只属于一条消息，不变式由 `AttachmentRepository.linkToMessage` 的 `message_id IS NULL` 条件保证 |
+| `BlogPost.java` | `blog_post` | 博客文章：`id`、`author`(`@ManyToOne` LAZY 非空，外键 `fk_blog_post_author`，**RESTRICT**)、`title`(100)、`summary`(可空 200，列表摘要)、`content`(LONGTEXT)、`status`(`@Enumerated(STRING)`，列显式声明 `varchar(20)`)、`publishedAt`(可空)、`createdAt`/`updatedAt`。索引 `idx_blog_status_published(status, published_at)` 与 `idx_blog_author_created(author_id, created_at)`。**文章全站可读**，只有写操作按作者校验。 |
+| `PostStatus.java` | — | 文章状态枚举：`DRAFT` / `PENDING` / `PUBLISHED` / `REJECTED` / `HIDDEN` + `label()` 中文名。一期只有 `PUBLISHED`，其余值先定义好；**列用 varchar 不用 MySQL ENUM**，以后加状态零迁移。 |
 | `AdminAuditLog.java` | `admin_audit_log` | 管理端操作审计：`actor_id/actor_name`、`action`（字符串，取值见 `AuditAction`）、`target_id/target_name`、`detail`、`created_at`。**actor/target 都不建外键**（删号是功能，留痕不该挡住删人），靠名字快照认人；只记成功的写操作且与业务同事务。 |
 | `AuditAction.java` | — | 审计动作名常量（CREATE_USER / UPDATE_ROLE / UPDATE_STATUS / RESET_PASSWORD / REVOKE_SESSIONS / DELETE_USER）+ `label()` 中文名。**存 varchar 不用 ENUM**：加动作零迁移，不用 ALTER 枚举列；不认识的老动作名 `label()` 原样返回。 |
 | `Role.java` | — | 枚举 `USER`、`ASSISTANT`。**加新值（如 SYSTEM）时已存在的库不会自动变更列类型**，需手工 `ALTER TABLE message MODIFY role enum(...)`（`init.sql` 末尾有备注）。 |
@@ -247,22 +257,59 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `UserRepository.java` | `Optional<User> findByUsername(String)`（登录用，username 有唯一索引）、`countByRoleAndStatus(Integer, Integer)`（「最后一个启用的管理员」一道闸）、继承 `JpaSpecificationExecutor<User>` 供管理端筛选分页。`findAllByOrderByIdAsc()` 已随 `GET /api/users` 删除。 |
 | `ConversationRepository.java` | `List<Conversation> findAllByOwnerIdOrderByUpdatedAtDesc(Long)`（会话列表，走复合索引）、`Optional<Conversation> findByIdAndOwnerId(Long, Long)`（**唯一的单会话查询入口**，带归属条件）、`int updateTitle(id, ownerId, title)`（**`@Modifying` JPQL 只改 title**：save() 会触发 `@PreUpdate` 刷新 updated_at 把会话顶到列表最前面，而改名不是「活动」；where 带 owner_id，越权改名影响行数为 0） 、`deleteByOwnerId(Long)`（删号级联，`@Modifying` 批量删）、`countByOwnerId(Long)`（个人信息页统计，走复合索引） |
 | `MessageRepository.java` | `findByConversationIdOrderByIdAsc(Long)`（只留给「不限条数」场景）、`findByConversationId(Long, Pageable)` 与 `findByConversationIdAndIdLessThan(Long, Long, Pageable)`（**id 游标分页**，排序刻意放 Pageable 里而不是方法名上）、`void deleteByConversationId(Long)`。**删除用 `@Modifying` + JPQL 而非派生 `deleteBy`**：派生删除会先 select 再逐条 delete，长会话删一次就是 2N 条 SQL。**调用方需自带事务**（见 `ConversationService.delete` 的 `@Transactional`） 、`deleteByOwnerId(Long)`（删号级联）、`countByOwnerId(Long)`（`@Query` 子查询：message 没有 owner 列，归属靠 conversation 传递） |
+| `BlogPostRepository.java` | `findPageByStatus(PostStatus, Pageable)`（**接口投影 + join 作者**，不取 content，已发布列表）、`findPageByAuthorId(Long, Pageable)`（我的文章）、`findByIdAndAuthorId(Long, Long)`（编辑 / 删除的唯一入口，越权查不到 → 404）、`deleteByAuthorId(Long)`（`@Modifying` 删号级联；调用方需自带事务）。 |
 | `AttachmentRepository.java` | `findLinkableIds(ids, conversationId)`（**只查 id 不查实体**：校验阶段把 LONGBLOB 拉进内存是白费）、`findByMessageIdInOrderByIdAsc(ids)`（拼多模态历史，带字节）、`findMetaByMessageIdIn(ids)`（**JPQL 构造器投影**成 `Object[]{messageId, AttachmentVO}`，消息列表只要元信息）、`findByIdForOwner(id, ownerId)`（读字节前的归属校验）、`linkToMessage(ids, messageId, conversationId)`（`@Modifying`，带 `message_id IS NULL` 条件保证一个附件只挂一条消息）、`deleteByConversationId(id)` 、`deleteByOwnerId(Long)`（删号级联第一步）、`countByOwnerId(Long)`（只 count 不取行：这张表带 LONGBLOB） |
 
 **service/ — 业务逻辑**
 
 | 文件 | 职责 |
 |---|---|
-| `ChatService.java` | **全项目最复杂的类**，SSE 流式对话编排。详见第八节 8.1。关键成员：`SSE_TIMEOUT_MARGIN_MS = 30_000`、`DEFAULT_TITLE = "新的对话"`、`TITLE_MAX_LENGTH = 30`、`MAX_THINKING_BUDGET = 262144`（qwen3.8 系最大思维链长度）、`executor = Executors.newVirtualThreadPerTaskExecutor()`、`sseTimeoutMs = requestTimeoutSeconds*1000 + 30000`、`CLOCK_ZONE = Asia/Shanghai`（日期注入的时区）。`buildOptions()` 统一做模型白名单 + 思考预算校验（思考关着时预算丢弃）；`recentHistory()` 把存库思考随历史回传（preserve_thinking），并经 `buildSystemPrompt()` 把「当前日期 + 人设」合成第一条 system 消息。内部类 `SurrogateBuffer`、`StreamAbortedException` |
+| `ChatService.java` | **全项目最复杂的类**，SSE 流式对话编排。`recentHistory()` 读取用户记忆与会话摘要，`stream()` 在 SSE done 之后异步提交记忆抽取 / 摘要任务。详见第八节 8.1。关键成员：`SSE_TIMEOUT_MARGIN_MS = 30_000`、`DEFAULT_TITLE = "新的对话"`、`TITLE_MAX_LENGTH = 30`、`MAX_THINKING_BUDGET = 262144`（qwen3.8 系最大思维链长度）、`executor = Executors.newVirtualThreadPerTaskExecutor()`、`sseTimeoutMs = requestTimeoutSeconds*1000 + 30000`、`CLOCK_ZONE = Asia/Shanghai`（日期注入的时区）。`buildOptions()` 统一做模型白名单 + 思考预算校验（思考关着时预算丢弃）；`recentHistory()` 把存库思考随历史回传（preserve_thinking），并经 `buildSystemPrompt()` 把「当前日期 + 人设」合成第一条 system 消息。内部类 `SurrogateBuffer`、`StreamAbortedException` |
 | `ConversationService.java` | 会话 CRUD，**每个公开方法都接 `CurrentUser`**：`create(user)`、`list(user)`、`messages(id, user, before, limit)`（游标分页）、`delete(id, user)`、`requireOwned(id, user)`（404 口径）、`rename(id, user, request)`、`locateRegenerateTarget(id)`（只定位不删除，返回 `DroppedReply(prompt, model, assistantMessageId)`；最后一条不是助手消息就 400）+ `deleteAssistantMessage(id)`（校验都过了再删：模型不支持图片时必须 400 在删除之前，否则用户连旧回答都丢了） |
 | `AttachmentService.java` | 图片附件的上传 / 校验 / 挂载 / 读取。`ALLOWED_MIME` 5 种位图（**刻意不含 SVG**：能带脚本）、`MAX_BYTES = 5MB`、`MAX_PER_MESSAGE = 4`。`upload()` 先传后发（上传不等发送）；`validateForConversation()` 一次挡掉「不存在 / 是别人的 / 已被占用」三种情况（都 400）；`requireOwned()` 读字节前查归属（404）。**只依赖 `ConversationService`，不被它反向依赖**，否则构造器循环 |
-| `UserService.java` | `login()`（`@Transactional`：`touchLastLogin()` 是 `@Modifying`；先验密码再判禁用 → 403）、`me()`、`changePassword()`、`updateSystemPrompt()`、`updateProfile()`（全空白存 NULL；**不换发 token**：改资料不是安全事件）、`stats()`（三个 count，只读事务）、`revokeOwnSessions()`（推 `passwordChangedAt`，本人所有 token 含当前这个立刻失效）。目标 id 一律只来自 token。构造时预算 `dummyHash` 防时序攻击。原来的 `list()` 已删。 |
+| `UserService.java` | `login()`（`@Transactional`：`touchLastLogin()` 是 `@Modifying`；先验密码再判禁用 → 403）、`me()`、`changePassword()`、`updateSystemPrompt()`、`updateProfile()`（全空白存 NULL；**不换发 token**：改资料不是安全事件）、`updateMemorySettings()`（只改自己的记忆总开关）、`stats()`、`revokeOwnSessions()`。目标 id 一律只来自 token。构造时预算 `dummyHash` 防时序攻击。 |
 | `AdminAuditService.java` | 审计的写与读：`record(actor, action, targetId, targetName, detail)` 供各管理 Service 在**自己的事务里**调用；`page(page, size)` 给 `/api/admin/audit`（id 倒序）。独立成服务是因为审计表全管理端共用，不绑死用户管理一个模块。 |
 | `AdminUserService.java` | 管理端增删改查，**业务规则与自我保护全在这里**（控制器薄）：筛选分页（`UserSpecifications`）、建号查重、改角色/启停/重置密码/强制下线/删号级联；「不能对自己下手」「最后一个启用的管理员动不得」一律 400。批量操作**不重写任何一条规则**：`AdminUserBatchService` 逐条穿代理调这里的方法。 |
 | `AdminUserBatchService.java` | 管理台批量编排：`execute(actor, BatchUserRequest)` → `BatchUserResultVO`（逐条结果）。**自身不带 `@Transactional`**：逐条穿代理调 `AdminUserService` 的单条方法 = 逐条独立事务，勾选里混进一个不能动的人不会连累其余 19 个；层级 / 自我保护 / 审计全部复用单条实现。只把 `ResponseStatusException` 与 `DataIntegrityViolationException` 翻译成逐条失败，别的异常照旧 500（真 bug 不该被伪装成「这一条失败了」）。**单独成 Bean 而不是在 AdminUserService 里加 batch 方法**：同类内 `this.xxx()` 不走代理，`@Transactional` 会静默失效。 |
 | `AdminAuditController.java` | `GET /api/admin/audit`（类级 `@RequireAdmin`）。挂在 `/api/admin/audit` 而不是 `/api/admin/users/audit`：审计表是全管理端共用的，读取入口不绑死单个模块。 |
 | `AdminUserController.java` | `/api/admin/users` 九个接口（八个单条 + `POST /batch` 批量），**类级 `@RequireAdmin`**（这个控制器下不存在普通用户该能调的方法，漏打一个就是越权洞）。批量只是把单条动作在一批 id 上跑一遍，编排与逐条事务在 `AdminUserBatchService`。 |
 | `UserSpecifications.java` | 用户列表的 Criteria 条件：关键字 / 角色 / 状态「传了才拼」；LIKE 转义 `% _ \\`（用户输入不当通配符）；`Locale.ROOT` 小写（避免土耳其语 I 问题）。 |
+| `BlogService.java` | 博客业务：`create`（作者来自 token，状态由 `BlogPolicy` 决定）、`listPublished`（全站已发布）、`listMine`（自己的全部状态）、`detail`（未发布只有作者能看）、`update` / `delete`（`findByIdAndAuthorId`，越权 404）、`deleteByAuthorId`（删号级联）。摘要为空时从正文粗略剥离 Markdown 生成前 120 字；正文只有代码块时存 NULL。 |
+| `BlogPolicy.java` | **发布策略的唯一入口**：一期 `initialStatus()` 恒返回 `PUBLISHED`。二期开审核改这里返回 `PENDING`，三期接发布权限也在这里判断；Controller / Service 不另写 if。 |
+
+**AI 记忆相关新增文件**
+
+| 文件 | 职责 |
+|---|---|
+| `entity/UserMemory.java` | 记忆主体：用户、kind、content、content_hash、source、confidence、status、来源会话 / 消息、使用计数。来源 id 只做溯源，不加外键。 |
+| `entity/MemoryKind.java` / `MemorySource.java` / `MemoryStatus.java` | 类型 / 来源 / 状态枚举与中文 label；库里存字符串或 int，新增枚举值不需要 ALTER。 |
+| `repository/UserMemoryRepository.java` | 按用户查启用记忆、精确哈希去重、单条归属查询、批量 touchUsed、删号级联删除。 |
+| `service/MemoryService.java` | 手动 CRUD、开关、Prompt 记忆加载与 token 截断；所有查询只认 CurrentUser。 |
+| `service/MemoryExtractionService.java` | SSE 结束后的异步抽取：取最近 6 条消息 + 20 条已有记忆，调 LLM 输出 JSON，再交给 Store 层。 |
+| `service/MemoryStoreService.java` | 抽取结果校验、敏感信息过滤、ADD / UPDATE / DELETE、去重与短事务写入。 |
+| `service/ConversationSummaryService.java` | 未摘要消息达到阈值后压缩最老一批，更新 `conversation.summary*`；单实例内按会话去重并发。 |
+| `service/ConversationSummaryStore.java` | 摘要写入的短事务边界；单独成 Bean，避免把 LLM 调用包进数据库事务。 |
+| `service/LlmTextService.java` / `UtilityModel.java` | 把流式接口收成一次性字符串；后台调用选模型并在无 Key（Mock）时跳过。 |
+| `service/MemoryText.java` | 规范化、SHA-256、明显密钥 / 身份证 / 银行卡过滤；手动与自动路径共用。 |
+| `service/ExtractedMemory.java` | 自动抽取的内部 DTO，不出网。 |
+| `dto/UserMemoryVO.java` 等 4 个 | 记忆列表 / 新增 / 编辑 / 开关请求响应。 |
+| `controller/UserMemoryController.java` | `/api/users/me/memories` 五个 CRUD 接口；开关在 `UserController`。 |
+| `config/MemoryProperties.java` / `MemoryConfig.java` | `memory.*` 配置与注册。 |
+
+**Agent 工具调用新增文件**
+
+| 文件 | 职责 |
+|---|---|
+| `tool/Tool.java` / `ToolContext.java` / `ToolResult.java` | 工具协议：名称、中文标签、给模型看的描述、JSON Schema、执行上下文、结构化结果。 |
+| `tool/ToolRegistry.java` | Spring 启动时收集所有 Tool Bean，按名称查找；重复名称直接启动失败。 |
+| `tool/SearchBlogTool.java` | `search_blog`：只在已发布博客的标题 / 摘要里 LIKE，不扫正文，不返回草稿。 |
+| `tool/GetBlogPostTool.java` | `get_blog_post`：复用 `BlogService.detail`，可见性与博客接口同一口径。 |
+| `tool/CalculatorTool.java` | `calculator`：递归下降解析四则运算，不执行任意脚本。 |
+| `service/AgentService.java` | planner → 工具执行 → 结果回灌 → 再规划的循环；最多 `agent.max-steps` 步。 |
+| `service/AgentObserver.java` | AgentService 与 SSE 的解耦接口：只发 ChatEvent + 检查取消。 |
+| `service/AgentToolCallStore.java` | 工具调用审计的短事务写入。 |
+| `entity/AgentToolCall.java` + `repository/AgentToolCallRepository.java` | `agent_tool_call` 表；无外键，删会话 / 删用户由应用层清理。 |
+| `llm/LlmTool.java` / `LlmToolCall.java` / `LlmTurn.java` | 工具定义、工具调用、planner 回合。`LlmToolCall` 必须序列化成 `{id,type,function:{name,arguments}}`。 |
 
 **resources / sql / test**
 
@@ -270,8 +317,10 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 |---|---|
 | `resources/application.properties` | 主配置，全部可调项写成 `${环境变量:仓库内默认值}`。逐项说明见第五节。 |
 | `resources/application-local.properties` | 本地真实密钥（DB 密码；**LLM key 已改为走环境变量 `DASHSCOPE_API_KEY`**）。**已被 `.gitignore` 忽略**，靠启动参数 `--spring.profiles.active=local` 生效。 |
-| `sql/init.sql` | 建库 + 建 4 张表（含 `attachment`）+ `INSERT IGNORE` 种子**超级管理员**（`admin` / BCrypt 哈希 / role=2）+ 四个测试账号（role 2/1/0/3，密码统一 test123456 的哈希）。全部 `IF NOT EXISTS`，**可重复执行**。结构与 `ddl-auto=update` 的结果一致；「已有库升级」段按日期记录每次表结构迁移的 SQL（2026-09-25 新增「个人资料三列」与「测试账号 + 种子自愈」两段）；末尾备注了两条手工维护项（`Role` 枚举扩值、删号级联顺序为什么留在应用层）。 |
-| `src/test/.../ChatbotApplicationTests.java` | 只有一个空的 `contextLoads()`，`@SpringBootTest`。**项目没有其他自动化测试**，需要真 MySQL 才能跑起来。 |
+| `sql/init.sql` | 建库 + 建 6 张表（含 `attachment` / `blog_post` / `user_memory`）+ `INSERT IGNORE` 种子**超级管理员**（role=2）+ 四个测试账号（role 2/1/0/3）。全部 `IF NOT EXISTS`，**可重复执行**。「已有库升级」段按日期记录迁移 SQL（2026-11-06 新增博客表、AI 记忆表、`sys_user.memory_enabled`、`conversation.summary*`）；末尾备注两条手工维护项（`Role` 枚举扩值、删号级联顺序为什么留在应用层）。 |
+| `src/test/.../ChatbotApplicationTests.java` | 空的 `contextLoads()`，`@SpringBootTest`，需要真 MySQL。 |
+| `src/test/.../service/MemoryTextTest.java` | 记忆纯函数测试：空白规范化、500 字截断、明显密钥 / 银行卡过滤、SHA-256 稳定性。 |
+| `src/test/.../service/ConversationSummaryStoreTest.java` | 摘要落库测试：在事务里建会话 → `updateSummary` → 清一级缓存 → 读回 summary / upTo；锁住 `@Modifying` 查询和事务边界。 |
 
 
 ---
@@ -370,30 +419,35 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `main.ts` | 5 | `import './assets/main.css'` + `createApp(App).use(router).mount('#app')`。插件只有 vue-router。 |
 | `App.vue` | 小 | 根组件只剩两件事：① `router.isReady()` 之前显示「正在恢复登录状态…」；② **对 `isAuthenticated` 的全局 watch**——登录态一旦消失（接口 401、ChatView 的退出登录、账号被禁用）就把界面送回 `/login?next=<当前路径>`。掉登录态的入口不止 401 一条，所以兜底放在这里而不是传输层；也因此 ChatView 不用为路由改任何一行。原来的「三分支权限闸门」已搬进 `router/guards.ts`。 |
 | `session.ts` | 小 | `ensureSession()`：本地有 token 时向 `GET /api/auth/me` 做**一次性**有效性确认并缓存 promise（每次导航都进守卫，不能一次导航打一次接口）；成功顺带刷新 localStorage 里的用户信息（角色可能变了）。原来是 `App.vue` 的 onMounted 逻辑，搬进守卫是因为守卫若直接读 localStorage 里的旧角色，「管理员被降级后刷新页面」那一下 `requiresAdmin` 会误判通过。独立成文件是因为 `auth.ts` 不能 import `api.ts`（会与 `api.ts → auth.ts` 成环）。 |
+| `api/memory.ts` | 小 | AI 记忆六个接口：列表 / 新增 / 编辑 / 删除 / 清空 / 总开关；路径固定 `/users/me`，传输层仍走 `api/client.ts`。 |
 | `router/index.ts` | 小 | `createRouter(createWebHistory())` + 挂守卫 + `scrollBehavior` 归零。**history 模式**：URL 干净，但生产部署必须让静态服务器把未命中路径回退到 `index.html`（nginx `try_files $uri /index.html`），否则直接访问或刷新 `/admin/users` 会拿到服务器 404；开发期 Vite 自带回退，本地永远发现不了这个问题。 |
 | `router/routes.ts` | 小 | **模块注册表**，也是「怎么加一个平级功能模块」的答案：`RouteMeta` 类型增强（`moduleId` / `title` / `icon` / `order` / `requiresAdmin` / `hidden` / `public`）+ 全部路由记录。带 `moduleId` 的记录会自动出现在导航条上，带 `requiresAdmin` 的会被守卫自动拦成 `/403`。聊天用静态 import（落地页不能闪空白），管理台用 `() => import()`（普通用户不下载管理台代码）。 |
 | `router/guards.ts` | 小 | 登录闸门 + 角色闸门：`beforeEach` 先 `await ensureSession()`，再按 `meta.public` / `isAuthenticated` / `meta.requiresAdmin` 决定放行、跳 `/login?next=` 还是 `/403`；`afterEach` 维护 `document.title`。另导出 `safeNextPath()`：`?next=` 只接受站内绝对路径，挡掉 `//evil.com` 这类协议相对 URL 的开放重定向。 |
 | `router/paths.ts` | 小 | `LOGIN_PATH` / `HOME_PATH` / `FORBIDDEN_PATH` 常量。单独一个文件而不是塞进 `routes.ts`：`routes.ts` 要 import 各视图，视图又要这些常量做「回到聊天」链接，放一起就是循环依赖。 |
 | `layouts/AppShell.vue` | 小 | 应用外壳：左侧 `ModuleNav` + 内容区 `<RouterView/>`，另外挂**关不掉的强制改密框**（`currentUser.mustChangePassword` 为真时以 force 模式渲染 `ChangePasswordDialog`）——强制改密是账号级的事，不跟模块走。登录页刻意不在外壳里。`.app-main` 的 `min-width: 0` 不能省。 |
-| `components/ModuleNav.vue` | 小 | 56px 模块导航条：条目**从路由表派生**（`meta.moduleId` + `order`），`requiresAdmin` 的模块对普通用户不渲染；底部账号按钮弹出**账号菜单**（个人信息 / 用户管理 / 操作记录 / 退出登录，管理页没有聊天顶栏的头像菜单，这些是外壳级的事）。激活态用 vue-router 自带的 `router-link-active`。**菜单必须贴导航条右侧弹出**（`left: calc(100% + 10px)`）：导航条只有 56px 宽，居中定位会让菜单左半截跑出视口被裁掉（2026-09-25 修的就是这个）。 |
-| `components/icons/IconChat.vue` 等 | 小 | 模块导航图标：24×24 描边、`stroke=currentColor`，颜色由导航条 CSS 决定。新模块照这个规格加一个 SFC，经 `markRaw()` 放进路由 meta（不 markRaw 会被 reactive 代理，白白增加开销）。现有 `IconChat`（聊天）、`IconUser`（个人信息，单人像）、`IconUsers`（用户管理，多人像）。 |
+| `components/ModuleNav.vue` | 小 | **可折叠侧边栏**：默认展开 176px，显示「图标 + 文字」；点顶部按钮收起到 56px 只留图标，折叠时靠原生 `title` 提示；展开状态存 localStorage 的 `chatbot.navExpanded`（默认展开，隐私模式下写入失败不影响本次会话）。条目仍**从路由表派生**（`meta.moduleId` + `order`），`requiresAdmin` 的模块对普通用户不渲染；底部账号按钮在展开态显示「头像 + 名字」，弹出**账号菜单**（个人信息 / 用户管理 / 操作记录 / 退出登录）。激活态用 `router-link-active`。**菜单贴导航条右侧弹出**（`left: calc(100% + 10px)`），折叠 / 展开两种宽度下都不会出屏。 |
+| `components/icons/IconChat.vue` 等 | 小 | 模块导航图标：24×24 描边、`stroke=currentColor`，颜色由导航条 CSS 决定。新模块照这个规格加一个 SFC，经 `markRaw()` 放进路由 meta（不 markRaw 会被 reactive 代理，白白增加开销）。现有 `IconChat`（聊天）、`IconBook`（博客）、`IconUser`（个人信息，单人像）、`IconUsers`（用户管理，多人像）。 |
 | `views/ForbiddenView.vue` | 小 | `/403`：已登录但权限不够。显示当前角色 + 「回到聊天」。挂在外壳里，所以还能用导航条去别的模块，不至于困在死页上。 |
 | `views/NotFoundView.vue` | 小 | `/:pathMatch(.*)*` 兜底，同样挂在外壳里：登录状态下打错地址还能点导航回去，不用手改 URL。 |
 | `auth.ts` | 小 | 登录态。导出 `ROLE_USER=0`/`ROLE_ADMIN=1`/`ROLE_SUPER_ADMIN=2`/`ROLE_GUEST=3`（与后端 `Roles` 对齐）；`isAdmin` 是**管理端准入**（管理员或超管，同后端 `canAccessAdmin`），另有 `isSuperAdmin`、`token`/`currentUser`（模块级 `ref`，初值读 `localStorage` 的 `chatbot.token`/`chatbot.user`）、`isAuthenticated`/`isAdmin`（`computed`）、`setSession(token,user)`、`clearSession()`，另有 `displayName`（昵称优先、回退登录名：顶栏头像、左下角菜单、个人信息页三处共用，避免某处忘了回退显示空白名字）。`readStoredUser()` 对 JSON 解析失败返回 null（存坏了就当没登录）。**本文件不要 import api.ts**，否则和 `api.ts → auth.ts` 形成循环依赖。 |
 | `api/client.ts` | 小 | **全站唯一的 HTTP 传输层**（2026-09-25 从 `api.ts` 抽出）。导出 `API_BASE='/api'`、`request<T>(path, init)`、`withAuth(headers?)`、`extractErrorMessage(response)`。`request()` 的口径：挂 `Authorization: Bearer`、非 2xx 读 `ErrorResponse.message`、**401 一律 `clearSession()`**（界面随即弹回登录页）、204 返回 `undefined`。抽出来的理由：项目要长出一批和聊天**平级的功能模块**，每个模块一个 api 文件互不干扰，但「挂鉴权头 + 401 清登录态」只能有一份实现，否则某个模块自己写 fetch 忘了处理 401，界面就会停在一张点什么都 401 的死页面上。**依赖方向刻意单向 `client.ts → auth.ts`**：本文件不 import router——反向 import 会形成 `router → guards → api → client → router` 的环，ESM 下表现为某个绑定初始化时还是 `undefined`，很难查。「掉登录态就回登录页」的兜底放在 `App.vue`，因为那条路径不止 401 一个入口（还有主动退出登录），兜底要兜在一个口子上。 |
 | `api/userAdmin.ts` | 小 | 用户管理模块的后端调用：`listAdminUsers` / `fetchUserAdminOptions` / `createAdminUser` / `updateUserRole` / `updateUserStatus` / `resetAdminUserPassword` / `revokeAdminUserSessions` / `deleteAdminUser` / `batchAdminUsers`（批量，返回逐条结果）/ `listAdminAudit`。传输层仍只用 `api/client.ts` 的 `request()`。 |
+| `api/blog.ts` | 小 | 博客模块接口：`listBlogPosts` / `listMyBlogPosts` / `getBlogPost` / `createBlogPost` / `updateBlogPost` / `deleteBlogPost`；分页参数 `page`（0 起）/ `size`（默认 10、上限 100）。传输层仍只用 `api/client.ts` 的 `request()`。 |
 | `api.ts` | 中 | **聊天与登录的接口清单**：只描述「有哪些接口、请求体和响应长什么样」，传输层在 `api/client.ts`。新增别的平级模块另开 `src/api/<模块>.ts`（见 `api/userAdmin.ts`）。导出：`login`、`fetchMe`、`changePassword`、`updateSystemPrompt`、`updateMyProfile` / `fetchMyStats` / `revokeMySessions`（个人信息页三件套）、`createConversation`、`listConversations`、`getMessages`、`deleteConversation`、`renameConversation`、`fetchLlmOptions`、`uploadAttachment`、`fetchAttachmentUrl`、`streamChat` / `streamRegenerate`（共用 `consumeSse()`）、类型 `StreamHandlers` / `StreamOptions` / `MessageUsage` / `MessagePageQuery`。 |
-| `types.ts` | 小 | 与后端一一对应：`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`、`CurrentUser`↔`UserVO`（含 `mustChangePassword?`）、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`、`Attachment`↔`AttachmentVO`；管理端 `AdminUser`↔`AdminUserVO`、`Page<T>`↔`PageVO`、`UserAdminOptions`、`ResetPasswordResult`、批量 `BatchUserAction` / `BatchUserBody` / `BatchUserItem` / `BatchUserResult`；个人信息 `MyStats`↔`UserProfileStatsVO`、`UpdateProfileBody`；另有纯前端的 `UiMessage` / `AttachmentRef`。`CurrentUser` 的 nickname / email / phone / status / lastLoginAt 都是**可选**：localStorage 里升级前存下的旧登录态没有这些字段。 |
+| `types.ts` | 小 | 与后端一一对应：`BlogPostSummary`↔`BlogPostSummaryVO`、`BlogPost`↔`BlogPostVO`、`SaveBlogPostBody`↔`SaveBlogPostRequest`、`BlogPostStatus`↔`PostStatus`；`Conversation`↔`ConversationVO`、`Message`↔`MessageVO`、`CurrentUser`↔`UserVO`（含 `mustChangePassword?`）、`LoginResult`↔`LoginResponse`、`ChatStreamEvent`↔`ChatEvent`、`MessagePage`↔`MessagePageVO`、`LlmOptions`↔`LlmOptionsVO`、`Attachment`↔`AttachmentVO`；管理端 `AdminUser`↔`AdminUserVO`、`Page<T>`↔`PageVO`、`UserAdminOptions`、`ResetPasswordResult`、批量 `BatchUserAction` / `BatchUserBody` / `BatchUserItem` / `BatchUserResult`；个人信息 `MyStats`↔`UserProfileStatsVO`、`UpdateProfileBody`；另有纯前端的 `UiMessage` / `AttachmentRef`。`CurrentUser` 的 nickname / email / phone / status / lastLoginAt 都是**可选**：localStorage 里升级前存下的旧登录态没有这些字段。 |
 | `assets/main.css` | 中 | 全局设计变量（暖中性纸感浅色 / 深墨暗色，跟随系统 `prefers-color-scheme`）+ 半径 / 阴影 / 细滚动条 / 选区 / 焦点环 + **登录与四个弹窗共用的基础件**（`.field*` / `.btn-*` / `.alert-*` / `.modal-*`，放全局是因为长得一样、只写一份） |
+| `lib/format.ts` | 小 | `formatDateTime(iso)`：ISO 时间 → `YYYY-MM-DD HH:mm`；空值 / 非法值统一显示 `—`。博客列表、详情共用，避免两处各写一遍日期格式化。 |
 | `lib/markdown.ts` | 小 | markdown-it 实例 + 自定义 fence 渲染器（代码块包 `.code-block`、加语言标签和复制按钮、给 `<code>` 补 `hljs` 类——不补 highlight.js 主题的配色就不生效，见 13.2 第 43 条）+ `renderMarkdown()`（渲染后过 DOMPurify）。**安全两道锁**：`html:false` 转义输入里的原始 HTML，DOMPurify 再兜一道；`breaks:true` 让单换行也换行。高亮只注册 highlight.js common 子集，认不出的语言原样输出不报错 |
 | `data/openingSuggestions.ts` | 小 | 空状态开场建议题库：5 个领域各 20 条、共 100 条，导出 `SUGGESTION_GROUPS`（分组数据）、`SUGGESTION_COUNT` 与 `drawSuggestions()`。**洗牌发牌**而不是每次 random：Fisher-Yates 洗完按顺序取，一轮内不重复；牌堆是模块级变量，刷新页面重新洗，对应「每次打开换一批」。补牌用 `while` 循环而不是「不够就重洗再截取」——后者会丢掉牌堆底部剩的几条，让它们出现得更频繁。文件头写明三条选题约束：只写陈述型不写决策型、不碰需要精确外部事实的问题、每条一行放得下（纯中文最长 13 字） |
 | `views/LoginView.vue` | 中 | 登录表单：两团淡品牌色光晕背景 + 居中卡片（圆角 20、入场动画）。成功后 `setSession()` + `router.replace(safeNextPath(next) ?? HOME_PATH)`——用 replace 而不是 push：登录页不该留在历史记录里，否则登录后按后退又回到登录页。失败展示后端文案并清空密码框。 |
 | `views/ChatView.vue` | **大（前端最大文件）** | 聊天主界面：隐形顶栏（会话标题 + `UserMenu` 头像菜单，「用户管理」项 `router.push('/admin/users')`）、居中限宽 760px 的消息列、空状态问候语 + 开场建议 chips、胶囊合成输入框（自动长高、圆形发送/停止、待发送图片缩略图条 + 粘贴/拖拽传图）。详见 4.2 |
 | `components/ConversationSidebar.vue` | 中 | 纯展示组件。props `conversations`/`activeId`/`canCreate`；emits `select(id)`/`create()`/`remove(id)`/`rename(id, title)`。品牌标 + 虚线「新建对话」；列表项 hover 才浮出重命名/删除图标（盖住时间戳，一行宽度有限）；双击标题或点铅笔行内改名 |
 | `components/MessageBubble.vue` | 小 | 单条消息。**助手消息带头像、不套气泡**（长回答铺在背景上比塞进盒子里好读）；用户消息是浅色圆角 pill。图片缩略图排在文字之前（与发给模型的顺序一致）、思考折叠、Markdown 正文、用量行、hover 才显形的「重新生成」 |
+| `components/AgentTimeline.vue` | 小 | Agent 工具时间线：agent_status 等待态 + tool_call / tool_result 步骤、参数折叠、耗时与错误状态；只在当轮流式期间存在。 |
 | `components/AttachmentThumb.vue` | 小 | 一张图的缩略图。`url` 有值就直接用（本地预览，**不 revoke**——所有权归创建方 ChatView）；只有 `id` 时 `onMounted` 里 `fetchAttachmentUrl()` 取字节转 objectURL、`onBeforeUnmount` 里自己 revoke。点击新标签打开原图；取失败显示「加载失败」而不是空白 |
 | `components/ChangePasswordDialog.vue` | 中 | 改密码弹窗。`force` prop：管理员重置过密码时由 AppShell 以**关不掉**的形态弹出（无取消、Esc/遮罩无效），普通入口不传、行为不变。成功后 `emit('changed', result)`，调用方必须 `setSession()` 换上新 token。 |
 | `components/SystemPromptDialog.vue` | 中 | 系统提示词（人设）弹窗，所有人可见。打开时用本地登录态里的 `currentUser.systemPrompt` 回显（不为回显再请求一次 /me）；保存调 `PUT /users/me/system-prompt`，成功后 `emit('changed', user)` 让父组件 `setSession(token, user)` 覆盖本地用户信息——**不用重新登录**。清空保存 = 移除人设 |
+| `components/MemoryDialog.vue` | 中 | AI 记忆管理弹窗：列表 + 新增 / 编辑 / 删除 / 清空；每次写操作 emit changed，父页面刷新计数。开关不在这里，避免和 ProfileView 的总开关重复。 |
 | `components/MarkdownContent.vue` | 小 | Markdown 渲染容器：`v-html` 挂 `renderMarkdown()` 的结果；**复制按钮是渲染产物、不在 Vue 事件体系里**，靠容器上的委托监听 + `closest('.copy-btn')` 处理，剪贴板写失败会显示「复制失败」而不是假装成功；`streaming` 为 true 时用 CSS `::after` 在最后一个块末尾挂闪烁光标 |
 | `components/common/ConfirmDialog.vue` | 小 | 通用二次确认：`title/text/confirmLabel/danger/busy` + `requireText`（输入一致才点亮确认，删号用它挡手滑）。危险操作不再用 `window.confirm` 系统框。 |
 | `components/admin/UserFormDialog.vue` | 小 | 新建用户：用户名 / 初始密码（可一键生成，`crypto.getRandomValues` + 去易混字符）/ 角色 / 状态；选项来自 `/options` 字典。 |
@@ -401,8 +455,11 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `views/admin/AuditView.vue` | 小 | 操作记录页（`/admin/audit`，`meta.hidden` 不进导航条，从 UsersView 的「操作记录」链接进入）：时间 / 操作者 / 动作 / 目标 / 明细 + 分页。**只读且没有「清空记录」按钮**：能删的审计不叫审计。 |
 | `views/admin/UsersView.vue` | 中 | 用户管理页（`/admin/users`）：表格（行内改角色、启停、重置密码、强制下线、删除）+ 搜索/角色/状态筛选 + offset 分页 + **多选与批量操作条**（启用 / 禁用 / 改角色 / 重置密码 / 强制下线 / 删除，只勾当前页、翻页即清空）；行内操作失败整页重拉。角色**筛选器**吃 `options.allRoles`（全量），行内改角色与新建弹窗吃 `options.roles`（可指派）。**层级锁死**：`canManage=false` 或自己的行，复选框与角色下拉、操作按钮全部 `disabled` + tooltip 说明原因（「不能修改自己的角色与信息」/「只能管理层级低于自己的用户」），不做「看起来能点、点了才 400」。批量结果用 `BatchResultDialog` 逐条摊开（含失败原因与一次性随机密码）。 |
 | `components/UserMenu.vue` | 小 | 顶栏头像下拉：个人信息 / 用户管理（仅 admin）/ 系统提示词 / 修改密码 / 退出登录。点外部或 Esc 关闭。**顶栏只留一个头像按钮**：文字按钮并排会把顶栏变成工具条。头像首字母与菜单名取 `auth.ts` 的 `displayName`（昵称优先） |
-| `views/ProfileView.vue` | 中 | 个人信息页（`/profile`，每个登录用户可进，懒加载）：基本资料表单（昵称 / 邮箱 / 手机号，登录名**只读**）+ 账号信息（角色 / 状态 / 创建 / 上次登录）+ 使用统计（会话 / 消息 / 图片）+ 安全区（改人设 / 改密码 / 退出所有设备，后两者复用聊天页那两个弹窗组件）。保存资料后 `setSession(token, user)` 覆盖本地登录态（后端不换发 token） |
-| `components/admin/BatchResetPasswordDialog.vue` | 小 | 批量重置密码：每人一个随机密码 / 统一设成一个密码两种模式；界面上直接写明「统一 = 所有人共用一个凭据」，引导用随机模式 |
+| `views/ProfileView.vue` | 中 | 个人信息页（`/profile`，每个登录用户可进，懒加载）：基本资料表单（昵称 / 邮箱 / 手机号，登录名**只读**）+ 账号信息（角色 / 状态 / 创建 / 上次登录）+ 使用统计（会话 / 消息 / 图片）+ AI 记忆卡片（总开关 / 最近三条预览 / 管理弹窗）+ 安全区（改人设 / 改密码 / 退出所有设备）。保存资料后 `setSession(token, user)` 覆盖本地登录态（后端不换发 token） |
+| `views/blog/BlogListView.vue` | 中 | 博客列表（`/blog`）：全部文章 / 我的文章两个 tab，卡片显示标题、摘要、作者、时间；我的文章额外显示状态标签与编辑 / 删除按钮，未发布标「仅自己可见」。offset 分页，删空当前页时自动退回上一页。 |
+| `views/blog/BlogDetailView.vue` | 小 | 文章详情（`/blog/:id`）：标题 / 作者 / 时间 + `MarkdownContent` 渲染正文；未发布文章顶部标「草稿 · 仅自己可见」。作者本人显示编辑 / 删除。 |
+| `views/blog/BlogEditorView.vue` | 中 | 写 / 编辑文章（`/blog/new`、`/blog/:id/edit`）：标题、可选摘要、Markdown 正文 + 编辑 / 预览切换（预览复用 `MarkdownContent`）。不引富文本库；保存后跳详情。 |
+| `components/admin/BatchResetPasswordDialog.vue` | 小 | 批量重置密码：每人一个随机密码 / 统一设成一个密码两种模式；两个模式标签直接说明差异，不再用大段说明文字 |
 | `components/admin/BatchResultDialog.vue` | 小 | 批量结果窗：成功 / 失败逐条列出（失败带后端中文原因）；随机密码逐条展示 + 「复制全部」。批量是逐条独立提交，「成功 3 / 失败 1」是正常结果而不是报错，所以不能用一个 toast 代替 |
 
 ### 4.2 ChatView.vue 的状态与行为
@@ -416,6 +473,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `messages: UiMessage[]` | 当前会话的消息（**只加载最新一页**，更早的靠「加载更早的消息」往前翻；含正在流式生成的临时项） |
 | `input` | 输入框内容 |
 | `streaming` | 是否正在生成（禁用输入/思考开关，切换「发送」↔「停止」按钮） |
+| `agentSteps` / `agentStatus` | Agent 时间线状态：`tool_call` 建 running 步骤，`tool_result` 回填 ok/error、summary、durationMs；只在当轮流式期间存在。 |
 | `loadingMessages` | 历史消息加载中 |
 | `thinkingOn` | 思考模式开关，**默认 `true`**，每条消息显式传给后端。想改用服务端默认值就把它设为 `undefined` 传给 api |
 | `llmModels` / `selectedModel` | 模型选择器：清单来自 `GET /api/llm/options`，选中值存 `localStorage.chatbot.model`；存过的模型若已不在白名单（配置改了），回落到服务端默认而不是留一个会 400 的 id |
@@ -459,7 +517,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | 卸载 | `onBeforeUnmount`：`stopStreaming()` + `clearPending()`（清空待发送图并 revoke 本地 URL） | 退出登录/token 失效被弹回登录页时，必须掐断还在跑的 SSE，否则 fetch 会继续往已不存在的界面写增量，还白烧模型 token；objectURL 不 revoke 会一直占内存 |
 | 退出登录 | `logout()` = `stopStreaming()` + `clearSession()` | 顺序不能反 |
 | 改密码成功 | `onPasswordChanged(result)` = `setSession(result.token, result.user)` | 后端换发了新 token |
-| 删除会话 | `removeConversation(id)`：`window.confirm` 二次确认 → 删 → 若删的是当前会话则清空状态 → 刷列表 → 若没选中项就选第一个 | — |
+| 删除会话 | 侧边栏点删除 → `ConfirmDialog` 网页内二次确认（带会话标题）→ 删 → 若删的是当前会话则清空状态 → 刷列表 → 若没选中项就选第一个 | 不用 `window.confirm`：系统框样式不可控，且和全站其它危险操作不一致 |
 | 重命名 | 侧边栏双击标题 → 行内输入框 → `PUT /{id}/title` → 只用响应覆盖本地那一条的 title，**不重拉列表** | 重拉列表会搅动滚动位置等状态；后端不刷新 updated_at，所以本地顺序也不用重算 |
 | 重新生成 | 最后一条助手气泡下的「重新生成」→ 本地先 `pop()` 掉旧回答、push 流式占位 → `POST /{id}/regenerate` → 后端删库里的旧回答、用同一条用户消息重跑 | 用户消息不重存（它已在库里），历史里自然不含旧回答，所以不会攒出两份回答；中断语义与 send() 完全一致 |
 
@@ -538,13 +596,28 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `spring.jpa.open-in-view` | `false` | — | 关掉 OSIV，避免懒加载在视图层触发 |
 | `llm.base-url` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | — | 任何 OpenAI 兼容接口都能直连（改这里 + `llm.model` 即可换服务商） |
 | `llm.api-key` | 空 | `DASHSCOPE_API_KEY`（兼容 `LLM_API_KEY`） | **留空自动走 `MockLlmClient`**。占位符写成 `${DASHSCOPE_API_KEY:${LLM_API_KEY:}}`：新名优先，两个都没配才是空 |
-| `llm.model` | `qwen3.6-flash` | — | **只是默认值**：请求体带 `model` 时以请求为准（须落在白名单里） |
-| `llm.available-models` | `qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max` | `LLM_AVAILABLE_MODELS` | 界面可选模型白名单（逗号分隔）。请求里的 `model` 不在里面就 400 并把清单写进错误文案；加模型改配置即可，不用改代码发版 |
+| `llm.model` | `deepseek-v4.1-flash` | — | **只是默认值**：请求体带 `model` 时以请求为准（须落在白名单里） |
+| `llm.available-models` | `qwen3.8-flash,qwen3.8-max,deepseek-v4.1-flash` | `LLM_AVAILABLE_MODELS` | 界面可选模型白名单（逗号分隔）。请求里的 `model` 不在里面就 400 并把清单写进错误文案；加模型改配置即可，不用改代码发版 |
 | `llm.enable-thinking` | `true` | `LLM_ENABLE_THINKING` | 映射为请求体顶层 `enable_thinking`（百炼/Qwen 系参数）。**服务商不认识该字段时把这一行整行注释掉**，后端就不下发。取舍见 `chatbot/README.md` |
 | `llm.request-timeout-seconds` | `900` | `LLM_REQUEST_TIMEOUT` | **整轮生成的总上限，不是空闲超时**。SSE 超时自动取它 +30 秒 |
 | `llm.max-history-messages` | `20` | `LLM_MAX_HISTORY` | 历史的**条数**上限；<=0 不限。与 `llm.max-history-tokens` 谁先满足谁生效 |
 | `llm.max-history-tokens` | `24000` | `LLM_MAX_HISTORY_TOKENS` | 历史的 **token 预算**：从最近一条往前累加估算（中文约 1 字 1 token、其余约 4 字符 1 token，思考也计入），超预算截断；<=0 不限。一次最多往前扫 200 条 |
-| `llm.vision-models` | `qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max` | `LLM_VISION_MODELS` | `available-models` 的子集：能吃图片输入的模型。带图请求打到不在这里的模型直接 400 并在文案里列清单；前端 `GET /api/llm/options` 拿它决定显不显示上传按钮。2026-09-24 实测四个模型在兼容协议下都接受 `image_url` |
+| `memory.enabled` | `true` | `MEMORY_ENABLED` | AI 记忆总开关。false 时不自动抽取、不注入，手动记忆仍保留 |
+| `memory.extraction-model` | `qwen3.8-flash` | `MEMORY_EXTRACTION_MODEL` | 自动抽取使用的模型；不在 `llm.available-models` 时回落 `llm.model` |
+| `memory.summary-model` | `qwen3.8-flash` | `MEMORY_SUMMARY_MODEL` | 会话摘要使用的模型，规则同上 |
+| `memory.max-per-turn` | `3` | `MEMORY_MAX_PER_TURN` | 每轮最多应用几条抽取结果 |
+| `memory.max-active` | `100` | `MEMORY_MAX_ACTIVE` | 单用户最多保留多少条启用记忆 |
+| `memory.inject-limit` / `inject-max-tokens` | `20` / `1200` | `MEMORY_INJECT_LIMIT` / `MEMORY_INJECT_MAX_TOKENS` | 每轮最多注入条数与记忆块 token 上限；超出从最久未用的开始截断 |
+| `memory.summary-trigger-messages` / `-tokens` | `20` / `8000` | `MEMORY_SUMMARY_TRIGGER_MESSAGES` / `MEMORY_SUMMARY_TRIGGER_TOKENS` | 未摘要消息达到任一阈值就触发摘要 |
+| `memory.summary-batch-messages` / `-max-chars` | `20` / `800` | `MEMORY_SUMMARY_BATCH_MESSAGES` / `MEMORY_SUMMARY_MAX_CHARS` | 每次压缩多少条旧消息、摘要最多保留多少字符 |
+| `memory.min-confidence` | `0.70` | `MEMORY_MIN_CONFIDENCE` | 自动抽取结果的最低置信度；低于它不入库 |
+| `agent.enabled` | `true` | `AGENT_ENABLED` | Agent 总开关；false 时完全退回普通聊天 |
+| `agent.planner-model` | `qwen3.8-flash` | `AGENT_PLANNER_MODEL` | planner 模型；不在 `llm.available-models` 时回落 `llm.model` |
+| `agent.max-steps` | `5` | `AGENT_MAX_STEPS` | 最多几轮工具调用 |
+| `agent.tool-timeout-seconds` | `20` | `AGENT_TOOL_TIMEOUT_SECONDS` | 单个工具执行超时 |
+| `agent.max-result-chars` | `4000` | `AGENT_MAX_RESULT_CHARS` | 回灌给模型的单结果上限；完整结果落库 |
+| `agent.planner-max-tokens` | `512` | `AGENT_PLANNER_MAX_TOKENS` | planner 输出上限，避免规划阶段写长文 |
+| `llm.vision-models` | `qwen3.8-flash,qwen3.8-max,deepseek-v4.1-flash` | `LLM_VISION_MODELS` | `available-models` 的子集：能吃图片输入的模型。带图请求打到不在这里的模型直接 400 并在文案里列清单；前端 `GET /api/llm/options` 拿它决定显不显示上传按钮。2026-09-24 实测四个模型在兼容协议下都接受 `image_url` |
 | `spring.servlet.multipart.max-file-size` | `5MB` | `UPLOAD_MAX_FILE_SIZE` | 单张图上限，与 `AttachmentService.MAX_BYTES` 同一个数：超了这里给 413（`GlobalExceptionHandler` 接住），controller 里那道给中文 400 文案 |
 | `spring.servlet.multipart.max-request-size` | `6MB` | `UPLOAD_MAX_REQUEST_SIZE` | 整个 multipart 请求上限，比单文件留 1MB 余量给边界与表单字段 |
 
@@ -589,6 +662,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `username` | `varchar(50)` | NOT NULL, UNIQUE `uk_sys_user_username` | 业务上按「忽略首尾空格」后的值存取（`login()` 里 `.trim()`） |
 | `password` | `varchar(100)` | NOT NULL | BCrypt 哈希（固定 60 字符，留余量换算法）。**任何接口都不返回该字段** |
 | `role` | `int` | NOT NULL | `0`=普通用户，`1`=管理员，`2`=超级管理员，`3`=访客。常量与**层级**在 `auth/Roles.java`（`rank()`：超管 3 > 管理员 2 > 普通用户 1 > 访客 0）；管理操作只允许「上对下」 |
+| `memory_enabled` | `tinyint(1)` | NOT NULL DEFAULT 1 | 是否允许 AI 从对话中学习长期记忆。默认开启；关闭后不抽取、不注入记忆，已有记忆保留；会话摘要仍可运行。全局 `memory.enabled=false` 时摘要也停。AuthInterceptor 每请求回带进 `CurrentUser`，`ChatService` 不用再查库。2026-11-06 加入 |
 | `status` | `int` | NOT NULL DEFAULT 0 | `0`=启用，`1`=禁用。常量在 `auth/UserStatus.java`。禁用后**登录 403、已登录的下一个请求 401**（AuthInterceptor 每请求回表）。**列带 DEFAULT 是刻意的**：给有数据的旧库加 NOT NULL 列时，没有 DEFAULT 在 MySQL 严格模式下直接失败；有 DEFAULT 则老行填 0=启用，不会把任何人锁在门外。2026-09-25 加入 |
 | `created_at` | `datetime(6)` | NOT NULL | `@PrePersist` 写入，`updatable=false` |
 | `password_changed_at` | `datetime(6)` | NULL | 从没改过密码为 NULL。签发时间（token `iat`）早于它的登录态一律作废 → **改密码会踢掉其他所有设备的会话**。**这列必须保持 `datetime(6)`**：后端按毫秒比较，精度掉到秒会让改密码那一秒签发的旧 token 躲过失效判断 |
@@ -608,9 +682,48 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `owner_id` | `bigint` | NOT NULL, FK `fk_conversation_owner` → `sys_user(id)`；复合索引 `idx_conversation_owner_updated(owner_id, updated_at)` | 会话归属用户。列表 / 读取 / 删除 / 发消息全部带它过滤；**查不到（不存在或属于别人）一律 404**，不返回 403 |
 | `created_at` | `datetime(6)` | NOT NULL | |
 | `updated_at` | `datetime(6)` | NOT NULL | **会话列表按它倒序**。`@PreUpdate` 自动刷新 + `ChatService.saveMessage()` 手动 set |
+| `summary` | `longtext` | NULL | 本会话较早内容的摘要，只给模型做上下文压缩用，不在界面展示。2026-11-06 加入 |
+| `summary_up_to_message_id` | `bigint` | NULL | 摘要已经覆盖到哪条消息 id；拼历史时 `id <= 它` 的消息不再重复发给模型。2026-11-06 加入 |
+| `summary_updated_at` | `datetime(6)` | NULL | 最近一次摘要更新时间。2026-11-06 加入 |
 
 > `owner_id` 是 2026-09-24 加的（之前会话全站共享，是当时最大的功能缺口，见第十四节变更记录）。**管理员也没有跨用户特权**：`/api/admin/users` 管的是账号本身，会话接口对管理员同样只返回他自己的。
 > 复合索引由实体上的 `@Index` 声明，Hibernate 建表时就会建；旧文档里「数据量大后自行加 `updated_at` 索引」的备注已不需要。
+
+**`user_memory`（跨会话 AI 记忆）** — 实体 `entity/UserMemory.java`
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `id` | `bigint` | PK, AUTO_INCREMENT | |
+| `user_id` | `bigint` | NOT NULL, FK `fk_user_memory_user` → `sys_user(id)` | 归属用户；所有查询必须带它，别人的 id 查不到（404） |
+| `kind` | `varchar(16)` | NOT NULL | `PREFERENCE` / `FACT` / `PROJECT` / `CONSTRAINT`，中文名在 `MemoryKind`。**不用 MySQL ENUM**，加类型零迁移 |
+| `content` | `varchar(500)` | NOT NULL | 规范化后的一句话事实 |
+| `content_hash` | `char(64)` | NOT NULL, UNIQUE `uk_user_memory_hash(user_id, content_hash)` | SHA-256，精确去重 |
+| `source` | `tinyint` | NOT NULL DEFAULT 0 | `0`=自动抽取，`1`=手动。手动记忆不允许被自动抽取覆盖 |
+| `confidence` | `decimal(3,2)` | NOT NULL DEFAULT 1.00 | 自动抽取低于 `memory.min-confidence` 不入库；手动固定 1.00 |
+| `status` | `tinyint` | NOT NULL DEFAULT 0 | `0`=启用，`1`=已归档。当前只产生 ACTIVE；用户删除走硬删除 |
+| `source_conversation_id` / `source_message_id` | `bigint` | NULL，**无外键** | 只做溯源；删会话 / 消息不连坐删记忆 |
+| `use_count` / `last_used_at` | `int` / `datetime(6)` | NOT NULL DEFAULT 0 / NULL | 被注入 Prompt 的次数与最近时间，供以后做衰减 / 清理 |
+| `created_at` / `updated_at` | `datetime(6)` | NOT NULL | `@PrePersist` / `@PreUpdate` 维护 |
+
+> 记忆和 `sys_user.system_prompt` **刻意分开**：system_prompt 是用户手写的人设，自动抽取的事实不能污染它。记忆是用户可见、可编辑、可删除的私有数据；管理员没有查看别人记忆的接口，删号时按 `user_memory.user_id` 一起硬删。
+> `content_hash` 唯一键在「自动抽取重复写入」和「用户重复添加」两条路径上都兜底；手动编辑会把 `source` 改为 MANUAL，之后自动抽取不会再覆盖。
+
+**`agent_tool_call`（Agent 工具调用日志）** — 实体 `entity/AgentToolCall.java`
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `id` | `bigint` | PK, AUTO_INCREMENT | |
+| `conversation_id` / `user_id` | `bigint` | NOT NULL，**无外键** | 删会话 / 删用户由应用层清理，日志不反过来挡住删除 |
+| `call_id` | `varchar(64)` | NOT NULL, UNIQUE `uk_agent_tool_call_id` | 模型给的 tool_call id |
+| `tool_name` | `varchar(64)` | NOT NULL | `search_blog` / `get_blog_post` / `calculator` |
+| `arguments_json` / `result_json` | `longtext` | NULL | 原始参数与完整结构化结果 |
+| `result_summary` | `text` | NULL | 给人和模型看的短结果 |
+| `status` | `varchar(16)` | NOT NULL | 当前只有 `OK` / `ERROR`；二期写工具再扩展审批状态 |
+| `error` | `text` | NULL | 失败原因 |
+| `duration_ms` | `int` | NULL | 工具执行耗时 |
+| `created_at` | `datetime(6)` | NOT NULL | |
+
+> 工具日志是审计 / 排查数据，不参与 Prompt。回灌给模型的版本由 `AgentService` 按 `agent.max-result-chars` 截断，避免一次搜索结果把上下文撑爆。
 
 **`message`（消息）** — 实体 `entity/Message.java`
 
@@ -646,6 +759,23 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 > **字节存库而不是存磁盘**是刻意取舍：备份变慢、库变大，换来部署面只有一个 MySQL。限 5MB × 4 张/消息把量级压住。
 > **孤儿附件没有定时清理**：传了没发的附件会一直留在库里，直到它所属的会话被删（前端「空会话回收」会顺手带走）。见 13.1。
 
+**`blog_post`（博客文章）** — 实体 `entity/BlogPost.java`
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `id` | `bigint` | PK, AUTO_INCREMENT | |
+| `author_id` | `bigint` | NOT NULL, FK `fk_blog_post_author` → `sys_user(id)`；索引 `idx_blog_author_created(author_id, created_at)` | 作者。**RESTRICT**：删号时 `AdminUserService.delete` 先按 author_id 删文章再删用户行 |
+| `title` | `varchar(100)` | NOT NULL | 与请求体 `@Size(max=100)` 同口径 |
+| `summary` | `varchar(200)` | NULL | 列表摘要。作者没填时由 `BlogService` 从正文剥离 Markdown 生成前 120 字；提不出文字存 NULL，不存空串 |
+| `content` | `longtext` | NOT NULL | Markdown 原文；**列表查询不取这一列** |
+| `status` | `varchar(20)` | NOT NULL | `DRAFT` / `PENDING` / `PUBLISHED` / `REJECTED` / `HIDDEN`，常量与中文名在 `entity/PostStatus`。**刻意不用 MySQL ENUM**：以后加状态零迁移 |
+| `published_at` | `datetime(6)` | NULL | 发布时间。列表按它倒序；草稿 / 待审 / 驳回为 NULL。编辑不刷新它，避免老文章被顶到最前 |
+| `created_at` | `datetime(6)` | NOT NULL | `@PrePersist` 写入 |
+| `updated_at` | `datetime(6)` | NOT NULL | 内容 / 状态变更时 `@PreUpdate` 刷新，只用于展示「编辑于」，不参与排序 |
+
+> **列表按 `status` + `published_at` 走复合索引**，且用接口投影只取摘要列：20 篇文章一页不会把 LONGTEXT 正文拉进内存。
+> **未发布文章的可见性**：详情接口允许作者本人查看自己的 `DRAFT` / `PENDING` / `REJECTED` / `HIDDEN`，列表只有 `/mine` 能看到；其他人一律 404。
+> 一期所有启用用户都能**直接发布**，`status` 恒为 `PUBLISHED`；审批与发布权限见 `service/BlogPolicy`，以后只改策略和加管理端接口。
 **`admin_audit_log`（管理端操作审计）** — 实体 `entity/AdminAuditLog.java`
 
 | 列 | 类型 | 约束 | 说明 |
@@ -666,17 +796,17 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 
 两条等价路径，任选其一：
 
-1. 执行 `chatbot/sql/init.sql`：建库（`utf8mb4` / `utf8mb4_unicode_ci`）+ 建 3 张表 + `INSERT IGNORE` 种子管理员 `admin`（`admin` 的 BCrypt cost=10 哈希，role=1）。全部 `IF NOT EXISTS` / `INSERT IGNORE`，**脚本可重复执行**，也不会把改过的密码覆盖回 `admin`。
+1. 执行 `chatbot/sql/init.sql`：建库（`utf8mb4` / `utf8mb4_unicode_ci`）+ 建 7 张表 + `INSERT IGNORE` 种子管理员 `admin`（`admin` 的 BCrypt cost=10 哈希，role=2 超级管理员）。全部 `IF NOT EXISTS` / `INSERT IGNORE`，**脚本可重复执行**，也不会把改过的密码覆盖回 `admin`。
 2. 直接启动后端：`ddl-auto=update` 自动建表，`SeedUserInitializer` 在 `sys_user` 为空时自动建默认管理员。
 
-**同步规则**：表结构的唯一事实源是 `entity/` 下的三个实体类。改实体后必须同步 `sql/init.sql`——`ddl-auto=update` 只补新表新列，**不会修改或删除已有列**，两边不一致时脚本会悄悄过期。 另外 `init.sql` 末尾有一段「已有库升级」注释（2026-09-24 会话归属那次留下的迁移 SQL）：给**已经有数据的旧库**手工执行 ALTER 用。以后再做破坏性结构变更，请往那段下面追加，别只改 CREATE TABLE——`IF NOT EXISTS` 对旧库是空操作。
+**同步规则**：表结构的唯一事实源是 `entity/` 下的实体类。改实体后必须同步 `sql/init.sql`——`ddl-auto=update` 只补新表新列，**不会修改或删除已有列**，两边不一致时脚本会悄悄过期。 另外 `init.sql` 末尾有一段「已有库升级」注释（2026-09-24 会话归属那次留下的迁移 SQL）：给**已经有数据的旧库**手工执行 ALTER 用。以后再做破坏性结构变更，请往那段下面追加，别只改 CREATE TABLE——`IF NOT EXISTS` 对旧库是空操作。
 
 
 ---
 
 ## 七、API 接口汇总
 
-### 7.1 全量接口表（共 27 个）
+### 7.1 全量接口表（共 39 个）
 
 | # | 方法 | 路径 | 鉴权 | 成功状态码 | 请求体 | 响应体 | 后端入口 |
 |---|---|---|---|---|---|---|---|
@@ -707,11 +837,24 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | 25 | GET | `/api/users/me/stats` | 需要 | 200 | — | `UserProfileStatsVO`（会话 / 消息 / 附件计数） | `UserController.stats` |
 | 26 | POST | `/api/users/me/revoke` | 需要 | **204** | — | —（本人全部登录态含当前这个立刻失效，调用方必须自己清本地登录态） | `UserController.revokeOwnSessions` |
 | 27 | POST | `/api/admin/users/batch` | **类级 `@RequireAdmin`** | 200 | `BatchUserRequest`（`ids` 1~100 + 一个动作 + 可选 `role` / `newPassword` / `generate`） | `BatchUserResultVO`（**逐条结果**，不是总数） | `AdminUserController.batch` |
+| 28 | GET | `/api/blog/posts` | 需要 | 200 | —（query：`page`(0 起) / `size`(默认 10、上限 100)） | `PageVO<BlogPostSummaryVO>`（仅已发布，`published_at` 倒序） | `BlogController.list` |
+| 29 | GET | `/api/blog/posts/{id}` | 需要 | 200 | — | `BlogPostVO`（已发布人人可看；未发布只有作者本人，其他人 404） | `BlogController.detail` |
+| 30 | POST | `/api/blog/posts` | 需要 | **201** | `SaveBlogPostRequest` | `BlogPostVO`（状态由 `BlogPolicy` 决定，一期直接 `PUBLISHED`） | `BlogController.create` |
+| 31 | PUT | `/api/blog/posts/{id}` | 需要 | 200 | `SaveBlogPostRequest` | `BlogPostVO`（只能改自己的，否则 **404**；状态与发布时间不变） | `BlogController.update` |
+| 32 | DELETE | `/api/blog/posts/{id}` | 需要 | **204** | — | —（只能删自己的，否则 404） | `BlogController.delete` |
+| 33 | GET | `/api/blog/mine` | 需要 | 200 | —（query：`page` / `size`，同上） | `PageVO<BlogPostSummaryVO>`（自己的全部状态，`created_at` 倒序） | `BlogController.mine` |
 
+| 34 | GET | `/api/users/me/memories` | 需要 | 200 | — | `UserMemoryVO[]`（自己的启用记忆，最多 100 条，不分页） | `UserMemoryController.list` |
+| 35 | POST | `/api/users/me/memories` | 需要 | **201** | `CreateMemoryRequest` | `UserMemoryVO`（手动添加，来源=MANUAL） | `UserMemoryController.create` |
+| 36 | PUT | `/api/users/me/memories/{id}` | 需要 | 200 | `UpdateMemoryRequest` | `UserMemoryVO`（别人 id 一律 404；改完来源=MANUAL） | `UserMemoryController.update` |
+| 37 | DELETE | `/api/users/me/memories/{id}` | 需要 | **204** | — | —（别人的 id 404） | `UserMemoryController.delete` |
+| 38 | DELETE | `/api/users/me/memories` | 需要 | **204** | — | —（清空自己的全部记忆） | `UserMemoryController.clear` |
+| 39 | PUT | `/api/users/me/memory-settings` | 需要 | 200 | `UpdateMemorySettingsRequest` | `UserVO`（含 `memoryEnabled`） | `UserController.updateMemorySettings` |
 
-> 3~7 号接口的控制器方法都声明了 `CurrentUser` 形参（解析见 `CurrentUserArgumentResolver`），归属校验统一在 `ConversationService` / `ChatService` 里做：**查不到或不是自己的会话一律 404**，管理员也没有跨用户特权。15~22 号与 27 号的 `CurrentUser` 不为鉴权（类级注解已经拦了），为的是 `AdminUserService` 的自我保护规则（见 8.6）。24~26 号是「管自己」，目标 id 只来自 token。
-前端封装位置：1~14 号与 24~26 号在 `chatbot-web/src/api.ts`，15~23 号与 27 号在 `chatbot-web/src/api/userAdmin.ts`（平级模块各开一个 api 文件，传输层共用 `api/client.ts`）。
+> 3~7 号接口的控制器方法都声明了 `CurrentUser` 形参（解析见 `CurrentUserArgumentResolver`），归属校验统一在 `ConversationService` / `ChatService` 里做：**查不到或不是自己的会话一律 404**，管理员也没有跨用户特权。15~22 号与 27 号的 `CurrentUser` 不为鉴权（类级注解已经拦了），为的是 `AdminUserService` 的自我保护规则（见 8.6）。24~26 号与 34~39 号是「管自己」，目标 id 只来自 token。
+前端封装位置：1~14 号与 24~26 号在 `chatbot-web/src/api.ts`，15~23 号与 27 号在 `chatbot-web/src/api/userAdmin.ts`，28~33 号在 `chatbot-web/src/api/blog.ts`，34~39 号在 `chatbot-web/src/api/memory.ts`（平级模块各开一个 api 文件，传输层共用 `api/client.ts`）。
 > 13 号超大小限制返回 **413**（不是 400）：异常在 multipart 解析阶段抛出，到不了 `AttachmentService` 里那道给中文文案的校验，所以由 `GlobalExceptionHandler` 的 `MaxUploadSizeExceededException` 处理器接住。14 号**不能用 `<img src>` 直接引用**：img 带不了 `Authorization` 头，而项目刻意不做 `?token=` 兜底。
+> 28~33 号的读接口对**所有登录用户**开放；写接口只认作者：编辑 / 删除别人的文章一律 404（不返回 403，和会话归属校验同口径）。详情接口对未发布文章也只放行作者本人。分页 `size` 超过 100 直接 400。
 > 15~22 号与 27 号的 400 文案全是中文且面向操作者：分页越界、未知角色/状态、用户名已存在、数据冲突、自我保护规则（「不能删除自己」「系统至少需要保留一个启用的管理员」…），见 8.6。27 号的**逐条失败不走 400**：能落到某一行上的规则违反（层级不够、是自己、最后一个管理员）都进 `items[i].message`，只有整批级的错（超过 100 个、未知动作、密码太短）才 400。
 
 ### 7.2 数据形状
@@ -733,8 +876,19 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 }
 
 // UserVO —— 没有 password 字段；systemPrompt 只在「自己」的响应里出现，管理员的用户列表里恒为 null
-{ "id": 1, "username": "admin", "role": 1, "roleLabel": "管理员", "systemPrompt": "你是资深 DBA…", "createdAt": "...", "mustChangePassword": false }
+{ "id": 1, "username": "admin", "role": 1, "roleLabel": "管理员", "systemPrompt": "你是资深 DBA…", "memoryEnabled": true, "createdAt": "...", "mustChangePassword": false }
 // mustChangePassword=true = 管理员重置过密码、本人还没改，前端据此强制弹改密框；登录与 /me 都带
+
+// UserMemoryVO（34~36 号响应）—— kindLabel / sourceLabel 由后端给中文
+{ "id": 12, "kind": "PREFERENCE", "kindLabel": "偏好", "content": "用户长期使用 Java 26 + Spring Boot 4",
+  "source": "MANUAL", "sourceLabel": "手动", "confidence": 1.0,
+  "createdAt": "2026-11-06T10:00:00", "updatedAt": "2026-11-06T10:00:00", "lastUsedAt": "2026-11-06T12:00:00" }
+
+// CreateMemoryRequest / UpdateMemoryRequest（35 / 36 号）
+{ "kind": "PREFERENCE", "content": "回答尽量给可运行代码" }
+
+// UpdateMemorySettingsRequest（39 号）
+{ "enabled": true }
 
 // AdminUserVO —— 管理表格的一行；没有 password，也没有 systemPrompt（「能列用户」不等于「能看别人的人设」）
 { "id": 2, "username": "alice", "role": 0, "roleLabel": "普通用户", "status": 1, "statusLabel": "禁用",
@@ -763,8 +917,24 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 
 // AdminAuditLogVO —— GET /api/admin/audit 的一行（actor / target 都是 id + 名字快照）
 { "id": 6, "actorId": 1, "actorName": "admin", "action": "DELETE_USER", "actionLabel": "删除用户",
-  "targetId": 2, "targetName": "carol", "detail": "级联删除其名下的会话 / 消息 / 附件", "createdAt": "..." }
+  "targetId": 2, "targetName": "carol", "detail": "级联删除其名下的会话 / 消息 / 附件 / 博客文章", "createdAt": "..." }
 
+
+// BlogPostSummaryVO —— GET /api/blog/posts 与 GET /api/blog/mine 的 items 元素（列表**不返回 content**）
+{ "id": 3, "title": "第一篇博客", "summary": "从正文自动提取的前 120 字…",
+  "authorId": 2, "authorName": "alice", "status": "PUBLISHED", "statusLabel": "已发布",
+  "publishedAt": "2026-11-06T09:00:00", "createdAt": "2026-11-06T08:59:00", "updatedAt": "2026-11-06T09:00:00" }
+// status 是 PostStatus.name()；中文一律看 statusLabel，前端不维护枚举映射
+// 未发布（PENDING / REJECTED / HIDDEN）只会出现在 /mine；/posts 只返回 PUBLISHED
+
+// BlogPostVO —— GET /api/blog/posts/{id} 的详情，比列表多 content
+{ "id": 3, "title": "第一篇博客", "summary": "…", "content": "# 标题\n\n正文 **Markdown**",
+  "authorId": 2, "authorName": "alice", "status": "PUBLISHED", "statusLabel": "已发布",
+  "publishedAt": "2026-11-06T09:00:00", "createdAt": "…", "updatedAt": "…" }
+
+// SaveBlogPostRequest —— POST /api/blog/posts 与 PUT /api/blog/posts/{id} 共用
+{ "title": "第一篇博客", "summary": "", "content": "# 标题\n\n正文 **Markdown**" }
+// title 必填 ≤100；content 必填 ≤50000；summary 可空 ≤200，空串 = 后端自动从正文提取前 120 字
 // ConversationVO
 { "id": 12, "title": "新的对话", "createdAt": "...", "updatedAt": "..." }
 
@@ -838,11 +1008,11 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 
 | 码 | 触发场景 |
 |---|---|
-| 400 | `@Valid` 校验失败（新密码长度不符）、请求体不是合法 JSON、原密码不正确、新密码与原密码相同、**文本和图片同时为空**、附件 id 不可用（不存在 / 属于别的会话 / 已被别的消息占用）、带图但模型不在 `llm.vision-models` 里、上传 MIME 不在白名单、单张超 5MB；**管理端**：分页越界、未知角色/状态、用户名已存在、数据冲突、自我保护规则（见 8.6） |
+| 400 | `@Valid` 校验失败（新密码长度不符）、请求体不是合法 JSON、原密码不正确、新密码与原密码相同、**文本和图片同时为空**、附件 id 不可用（不存在 / 属于别的会话 / 已被别的消息占用）、带图但模型不在 `llm.vision-models` 里、上传 MIME 不在白名单、单张超 5MB；**记忆**：内容为空 / 超过 500 字 / 含明显密钥或银行卡、重复内容、达到 100 条上限；**管理端**：分页越界、未知角色/状态、用户名已存在、数据冲突、自我保护规则（见 8.6） |
 | 413 | 上传超过 `spring.servlet.multipart.max-file-size`（multipart 解析阶段就抛，`GlobalExceptionHandler` 接住给中文文案） |
 | 401 | 未带 token、token 格式错/签名错/已过期、账号已被删、改过密码导致旧 token 失效、**账号被禁用**（AuthInterceptor 回表发现 `status=DISABLED`，立刻生效）。**前端收到任何 401 都 `clearSession()` 弹回登录页** |
 | 403 | 普通用户访问 `@RequireAdmin` 接口（`/api/admin/**`）；**被禁用的账号登录**（文案与 401 同一句，且放在密码校验之后，避免泄露「用户名存在」） |
-| 404 | 会话不存在、**会话属于别人**（归属校验刻意不返回 403，免得泄露「这个 id 存在」）、用户不存在、**附件不存在或属于别人的会话**（同一口径） |
+| 404 | 会话不存在、**会话属于别人**（归属校验刻意不返回 403，免得泄露「这个 id 存在」）、用户不存在、**附件不存在或属于别人的会话**、**记忆不存在或属于别人**（同一口径） |
 | 204 | 删除会话成功；管理端的强制下线（`/revoke`）与删号（`DELETE /api/admin/users/{id}`） |
 
 ### 7.3 SSE 事件契约（`POST /api/conversations/{id}/chat`）
@@ -855,6 +1025,9 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `delta` | `{"type":"delta","content":"..."}` | 正式回答的增量文本，逐段推送。前端累加即为完整回答，也是唯一入库的内容 |
 | `done` | `{"type":"done","messageId":123,"model":"qwen3.8-max","prompt_tokens":4,"completion_tokens":30,"reasoning_tokens":12}` | 生成结束，助手消息已入库。除 `messageId` 外**附带 model 与用量**（下划线命名、NON_NULL）：前端流式期间只有本地占位消息，不回填用量行要等刷新才出现；老前端只读 messageId 不受影响 |
 | `error` | `{"type":"error","content":"..."}` | 出错。**文案在 `content`，不是 `message` 字段** |
+| `agent_status` | `{"type":"agent_status","content":"正在分析是否需要调用工具…"}` | Agent 正在规划 / 整理；前端时间线显示等待态。 |
+| `tool_call` | `{"type":"tool_call","callId":"call_1","tool":"search_blog","label":"搜索站内博客","args":{"query":"SSE"}}` | 模型发起一次工具调用；后端已校验工具名，执行前推送。 |
+| `tool_result` | `{"type":"tool_result","callId":"call_1","status":"OK","summary":"找到 1 篇","durationMs":19}` | 工具执行结束；失败时 `status=ERROR`，`summary` 是原因。 |
 
 约定：前端遇到不认识的 `type` **直接忽略**（`api.ts` 的 `switch` 没有 default 分支），保持向后兼容；新增事件类型时老前端不会崩。
 
@@ -931,6 +1104,66 @@ POST /api/conversations/{id}/chat  {message, enableThinking?, attachmentIds?}
 ```
 
 > 重新生成**只能重跑最后一条回答**：按钮只挂在最后一条助手气泡上。要改更早的轮次，语义上等于「从那里重开一条分支」，那是另一个功能，别在这个接口上叠。
+
+### 8.1.1 Agent 工具调用闭环
+
+```
+ChatService.stream()
+  → AgentService.prepare(conversation, user, history, options, observer)
+      1. 没有 API Key / agent.enabled=false / 没有工具 → 原样返回 history（普通聊天）
+      2. planner.completeChat(messages, tools, tool_choice=auto)
+      3. 没有 tool_calls → 返回 messages，进入最终流式回答
+      4. 有 tool_calls：
+           assistant(tool_calls) 入 messages
+           for each call:
+             推 SSE tool_call
+             ToolRegistry 找工具（白名单）
+             虚拟线程执行，20 秒超时
+             推 SSE tool_result
+             写 agent_tool_call
+             role=tool 结果入 messages
+           回到第 2 步，最多 5 步
+      5. 超过 max-steps：追加“基于已有结果回答，不要再调用工具”的约束
+  → llmClient.streamChat(finalMessages, options, ...)  // 最终回答仍然流式
+```
+
+关键取舍：
+
+- **planner 非流式、最终回答流式**：当前兼容客户端只解析 `delta.content`；流式 tool_calls 需要按 index 拼参数 JSON，复杂度高。MVP 先用非流式 planner，把闭环跑稳。
+- **planner 失败自动回退**：模型不支持 tools / 400 / 超时，直接返回原 history 走普通聊天，不让整轮失败。
+- **工具结果回灌格式**：`{status, summary, data}` 的 JSON，超过 `agent.max-result-chars` 截断；完整结果落 `agent_tool_call`。
+- **工具白名单**：模型只能调用 `ToolRegistry` 里存在的工具；未知工具变成一条 ERROR tool 结果，不会执行任何真实动作。
+- **当前只读**：`search_blog` / `get_blog_post` / `calculator` 都不改数据。写工具二期再加审批与幂等。
+
+### 8.1.2 AI 记忆与会话摘要
+
+```
+【读路径】ChatService.recentHistory(conversation, user)
+  → MemoryService.promptMemories(user)
+      · memory.enabled=false 或 user.memoryEnabled=false → 空
+      · 查 ACTIVE 记忆，按最近更新取 inject-limit 条
+      · 按 inject-max-tokens 截断，批量 UPDATE use_count / last_used_at
+  → conversation.summary + summary_up_to_message_id
+  → 拼成一条 system：
+      当前日期 + 用户人设 + 「关于用户的长期记忆」+ 「本会话较早内容摘要」
+  → 取最近消息时跳过 id <= summaryUpToMessageId 的部分，避免摘要与原文重复进上下文
+
+【写路径】stream() 在 send(done) + emitter.complete() 之后提交虚拟线程
+  → MemoryExtractionService.extractAndStore(...)
+      · 取最近 6 条消息 + 20 条已有记忆，调 LLM 输出 JSON
+      · MemoryStoreService.apply() 做校验 / 去重 / ADD|UPDATE|DELETE 短事务
+  → ConversationSummaryService.maybeSummarize(...)
+      · 未摘要消息 >= 20 条或估算 token >= 8000 时，压缩最老 20 条
+      · 更新 conversation.summary / summary_up_to_message_id
+```
+
+关键取舍：
+
+- **抽取和摘要都不阻塞 SSE**：它们在 `done` 之后才提交；失败只记日志，用户已经看到的回答不受影响。
+- **LLM 调用不包在数据库事务里**：`MemoryExtractionService` / `ConversationSummaryService` 先调模型，再交给 `ConversationSummaryStore` / `MemoryStoreService` 等短事务落库，避免 30 秒模型调用一直占着数据库连接。
+- **摘要是派生数据**：丢了可以重新生成；`summary_up_to_message_id` 没推进就下一轮重试。记忆是用户数据，用户可编辑 / 删除，手动记忆不会被自动抽取覆盖。
+- **单实例并发闸门**：`ConversationSummaryService` 用 `ConcurrentHashMap.newKeySet()` 保证同一会话只跑一个摘要任务；多实例部署时需要换成数据库行锁（当前项目还没做多实例）。
+- **Mock 模式不自动学习**：没有 API Key 时 `UtilityModel.resolve()` 返回 null，抽取 / 摘要直接跳过；手动记忆仍可正常增删和注入。
 
 ### 8.2 鉴权流程
 
@@ -1027,8 +1260,8 @@ send():
 | 建号 / 改角色 | 新角色层级 ≥ 操作者层级：不能造一个和自己平级或更高的账号（所以超级管理员也建不出第二个超级管理员） |
 | 降级 / 禁用 / 删除 | 目标是「最后一个**启用的**管理者」：两层闸，① 启用的管理员+超级管理员合计 ≤1 → 400「系统至少需要保留一个启用的管理员」；② 目标是最后一个启用的**超级管理员** → 400「…超级管理员」。已禁用的管理者本来就进不来，不占名额 |
 
-**删号级联**（单事务，顺序不能换——三个外键都是 RESTRICT，先删父行撞 errno 1451）：
-`attachment.deleteByOwnerId` → `message.deleteByOwnerId` → `conversation.deleteByOwnerId` → `userRepository.delete`。
+**删号级联**（单事务，顺序不能换——四个外键都是 RESTRICT，先删父行撞 errno 1451）：
+`attachment.deleteByOwnerId` → `message.deleteByOwnerId` → `conversation.deleteByOwnerId` → `blogPost.deleteByAuthorId` → `userRepository.delete`。
 与 `ConversationService.delete` 同一套顺序，只是按 owner 一次删完、不逐个会话循环。刻意不做软删除，理由见九 21。
 
 **重置密码 vs 强制下线**：两者都靠推 `password_changed_at` 让旧 token 立刻失效（复用 8.3 的机制，不建会话表）。
@@ -1055,6 +1288,39 @@ send():
 **种子账号与测试账号（`SeedUserInitializer`）**：三件事都幂等（建超管 / 超管自愈 / 补测试账号），见 2.2 config 表。
 超管自愈的触发边界是「系统里一个**启用的**超管都没有」：还有别的启用超管时，种子账号被降级是管理者的决定，
 启动流程不改回去；一个都没有时不提回来，系统就再也创建 / 提升不出管理员（层级规则下的死局）。
+
+### 8.7 博客流程（/api/blog）
+
+**发布**：
+
+```
+POST /api/blog/posts
+  → AuthInterceptor 注入 CurrentUser
+  → BlogController.create
+  → BlogService.create：author = userRepository.getReferenceById(user.id())
+      → applyContent()：标题 trim；摘要为空则从正文剥离 Markdown 取前 120 字
+      → BlogPolicy.initialStatus(user)：一期恒返回 PUBLISHED
+      → publishedAt = now → save → BlogPostVO
+```
+
+**阅读**：
+
+```
+GET /api/blog/posts?page&size
+  → BlogPostRepository.findPageByStatus(PUBLISHED, pageable)
+      → 接口投影：只取 title / summary / 作者名 / status / 时间，不取 content
+      → join sys_user，CASE 做「昵称优先、回退用户名」
+      → published_at DESC, id DESC
+  → PageVO<BlogPostSummaryVO>
+```
+
+**可见性与写权限**：
+
+- 详情：`PUBLISHED` 所有登录用户可看；其余状态只有作者本人，其他人 404。
+- 编辑 / 删除：唯一入口 `findByIdAndAuthorId(id, user.id())`，查不到（含别人的文章）一律 404。
+- 列表：`/posts` 全站已发布；`/mine` 只按 token 里的作者 id 查，包含全部状态。
+
+**二期审批怎么接**：`BlogPolicy.initialStatus()` 改为按配置返回 `PENDING`，再加管理端「待审列表 + 状态流转」接口；`status` 与 `publishedAt` 已在表里，不需要改表结构，也不需要改一期接口。
 
 ## 九、安全设计要点
 
@@ -1087,6 +1353,10 @@ send():
 25. **禁用立刻生效，且不留枚举口子**：AuthInterceptor 每请求回表，所以禁用后目标账号的**下一个请求**就 401，不用等 token 自然过期；登录接口对禁用账号返回 403，但**放在密码校验之后**——顺序反了的话，「这个用户名存在但被禁用了」就成了一个可枚举的信息。已知限制：正在跑的 SSE 不会被打断（拦截器只在请求开始时执行）。
 26. **附件字节走鉴权接口而不是公开 URL**：`GET /api/attachments/{id}` 默认要登录（不在 `PUBLIC_PATHS`），归属校验与会话同一口径（404）；前端 fetch 成 blob 再转 objectURL。**刻意不做 `?token=` 兜底**（长期凭证进 URL / 日志 / 浏览器历史），也不把 base64 塞进消息 JSON（响应体膨胀几十倍）。出网 `Content-Type` 只能取白名单 5 种图片 MIME + `nosniff`，改名上传的 HTML 不会被当页面执行；**白名单刻意不含 SVG**（能带脚本）。
 27. **上传校验两道**：`spring.servlet.multipart.max-file-size`（413）与 `AttachmentService` 的 5MB / MIME / 张数校验（400 中文文案）是同一个数的两处表达，改一处必须改另一处；前端还有一道同样的本地校验，但后端那道才是兜底。
+
+28. **AI 记忆是用户私有数据**：所有记忆接口固定走 `/api/users/me/memories`，目标用户只来自 token；管理员没有查看别人记忆的接口，删号时 `user_memory` 一并硬删。记忆是「背景资料」不是系统指令，拼 Prompt 时明确标注；入库前过滤明显密钥 / 身份证 / 银行卡，用户可关闭、编辑、删除、清空。
+
+29. **Agent 工具默认只读且走白名单**：模型只能调用 `ToolRegistry` 注册的工具；参数过 JSON Schema，执行有 20 秒超时，工具以 `CurrentUser` 身份运行。当前不提供写工具；二期写工具必须有二次确认、幂等键和审计。工具结果回灌前截断，完整结果只落 `agent_tool_call`。
 
 ## 十、开发指南
 
@@ -1174,20 +1444,34 @@ npm run preview      # 本地预览 dist/
 6. **`chatbot/README.md` 末尾的「后续待加」**：见该文件，已完成的条目会随变更删掉。
 7. **多模态往哪扩**：图片输入已通（`image_url` + base64）。下一步自然是把 `data` 换成对象存储 key（多实例部署的前提）、给孤儿附件加定时清理、或按 `usage` 回填做动态 token 预算（把图片 token 也算进去）。
 
+8. **博客审批 / 发布权限**：只改 `service/BlogPolicy.initialStatus()`——二期读配置返回 `PENDING` 并加管理端待审 / 状态流转接口，三期在同一个方法里查发布权限。`blog_post.status` 与 `publishedAt` 已经预留，不需要改表；管理端写操作记得调 `AdminAuditService.record()` 并给 `AuditAction` 加常量。
+
 ---
+
+9. **记忆增强**：当前按最近更新注入，不做向量检索。单用户记忆超过 100 条或需要「语义召回」时，再给 `user_memory` 加 embedding 字段并引入向量检索；不要把现在的 `content_hash` 精确去重误当成语义去重。多实例部署时，`ConversationSummaryService` 的进程内并发闸门要换成数据库行锁。
+
+10. **Agent 工具扩展**：新工具 = 实现 `Tool` 并注册为 Spring Bean；需要外部系统时优先包成 MCP server，而不是在 AgentService 里写 if。写工具复用 `agent_tool_call.status` 扩展审批状态，不要在只读工具上直接加写操作。
 
 ## 十三、已知限制、坑与文档偏差
 
 ### 13.1 功能限制
 
 1. **SSE 单向**：客户端断开后无法恢复，只能重新发起请求；已生成部分会入库，刷新能看到。
-2. **无自动化测试**：`src/test` 只有空的 `contextLoads()`，且需要真 MySQL。原本还有个手动脚本 `chatbot/test_sse.py`（gitignore、不入库），**已于 2026-09-24 删除**；现在 SSE 全链路只剩 curl 手测。
+2. **自动化测试覆盖很窄**：`src/test` 只有 `contextLoads()`（需真 MySQL）、`MemoryTextTest`、`ConversationSummaryStoreTest`、`AgentToolCallStoreTest`、`CalculatorToolTest`、`SearchBlogToolTest`；SSE 和真实 LLM 工具选择仍只能手测。原本的手动脚本 `chatbot/test_sse.py` 已于 2026-09-24 删除。
 3. **联网搜索拿不到引用来源**：OpenAI 兼容协议不支持「返回搜索来源 / 角标标注」（只有 DashScope 原生协议支持），所以界面上没有「参考了哪几个网页」；要做引用 UI 得换协议，是另一个工程量。
 4. **`LlmClient` Bean 启动时定型**（Mock vs OpenAI 兼容实现二选一，运行期改 `llm.api-key` 必须重启）；但**模型 id 已可每请求切换**（`llm.available-models` 白名单 + 请求体 `model`），不再是「全服务只有一个模型」。
 5. **图片占的 token 不计入 `llm.max-history-tokens` 预算**：估算器只认文字，视觉 token 由分辨率决定、本地算不准。带图会话的真实上下文大小以用量里的 `prompt_tokens` 为准（实测一张 320×200 的图约 90 token，且每轮历史都会重发）。要严格控制成本得改成按 usage 回填的动态预算。
 6. **孤儿附件没有定时清理**：传上来了但没随消息发出去的附件会一直留在库里，直到所属会话被删（前端「空会话回收」会顺手带走）。项目没有 `@Scheduled`，加清理任务得先引调度。
 7. **图片只进 Chat Completions 的 `image_url`，不做 OCR / 图像检索 / 生成**：要「以图搜图」或生图是另一个工程量（百炼有独立的多模态接口）。
 8. **批量操作不具备原子性（刻意）**：逐条独立事务，「成功 3 / 失败 1」是正常结果而不是需要重试的错误（理由见 8.6）。勾选只限当前页、翻页即清空，也是同一取向：不在眼前的人不该被一个「删除 17 个」的按钮带走。操作审计仍只覆盖用户管理的写操作，未来其他管理模块接入时要各自调 `AdminAuditService.record()`。
+9. **博客一期没有审批、发布权限管理、评论、点赞、草稿 UI**：所有启用用户都能直接发布，`status` 恒为 `PUBLISHED`。表里的 `PENDING` / `REJECTED` / `HIDDEN` 与 `BlogPolicy` 是为二期审批预留的，界面暂时不会产生这些状态；`/mine` 已经能展示它们，二期接上即可。
+
+10. **记忆 MVP 不做向量检索**：单用户最多 100 条短事实，按「最近更新 + 手动优先」取 20 条注入即可。等记忆量或用户数上来再加 embedding，不要为 MVP 引入向量库。
+11. **摘要只在单实例内去重**：`ConversationSummaryService` 用进程内 `Set<Long>` 防同一会话并发摘要；多实例部署会出现两个节点同时摘要同一会话，届时必须改成数据库行锁 / 状态位。当前项目本身还没有多实例部署。
+
+12. **Agent 当前只有 3 个只读工具**：`search_blog` / `get_blog_post` / `calculator`；没有写工具、审批、并行工具、MCP、多智能体。写博客草稿等动作是二期。
+13. **工具时间线刷新后不重放**：`agent_tool_call` 已落库，但 MVP 没有“按会话读取工具日志”的 REST 接口；刷新页面只保留最终回答，实时时间线只在当轮流式期间可见。
+14. **每轮多一次 planner 调用**：工具闭环每轮先调一次非流式 planner，再调最终流式回答；简单聊天也会多一次小请求。`agent.enabled=false` 可完全退回旧行为。
 
 ### 13.2 容易踩的坑
 
@@ -1236,8 +1520,18 @@ npm run preview      # 本地预览 dist/
 42. **日期注入的时区写死 `Asia/Shanghai`，别顺手改成 `systemDefault()`**：模型没有时钟，「今天几号」只能靠注入的 system 消息回答；跟服务器时区走的话，部署到 UTC 容器后每天早 8 点前会答成昨天。也不要用 `"CST"` 这种缩写（同时指中国标准时间和美国中部时间）。日期必须与用户**人设合成一条** system 消息——部分服务商只认第一条。
 
 43. **代码块里的 `hljs` 类必须由 fence 渲染器自己补**：highlight.js 的主题（`github-dark.css`）把文字颜色和背景都挂在 `.hljs` 上，而 markdown-it 只给 `<code>` 加 `language-xx`、不加 `hljs`。少了这个类，主题的 `color` 永远不生效，代码块文字退回继承来的正文色——浅色主题下 `--text` 是近黑的 `#22201b`，底是 `MarkdownContent.vue` 里硬编码的 `#0d1117`，于是「黑底黑字」。两个放大症状的巧合：① 暗色模式看起来完全正常（继承到的正文色本来就是浅的），所以只在浅色用户那里暴露；② 语言被 highlight.js 认出来的代码块只有关键字 / 字符串那类 token 可见，纯文本（模型常写的 ```text）整块不可读——这就是它「有时候」才出现的原因。修在 `lib/markdown.ts` 的 fence 渲染器里（2026-10-08）。
+44. **不要把 `/api/blog/**` 加进 `WebConfig.PUBLIC_PATHS` 来实现「游客也能读」**：`excludePathPatterns` 只按路径排除、不区分 HTTP 方法，会把 `POST /api/blog/posts` 一起放行。真要做匿名阅读，在拦截器里按「GET + 路径前缀」单独放行，或另开一个只读的 `/api/public/blog/**`。
+45. **博客列表不许查实体再转 VO**：`content` 是 LONGTEXT，一页 10 篇就会把正文全拉进内存；而且 `author` 是 LAZY、`open-in-view=false`，在 Controller / 序列化阶段访问昵称会直接 `LazyInitializationException`。列表必须走 `BlogPostSummaryView` 投影（见 `BlogPostRepository`）。
 
-### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条，2026-09-25 追加第 6、7 条，2026-10-08 追加第 8 条）
+46. **记忆和 system_prompt 不要混用**：`system_prompt` 是用户手写的人设，自动抽取的事实必须写 `user_memory`；反过来也不要把对话摘要写进记忆表，否则用户在记忆管理里会看到一堆对话梗概。
+47. **自动抽取不能覆盖手动记忆**：`MemoryStoreService` 对 `source=MANUAL` 的记录直接跳过 ADD/UPDATE/DELETE。用户手动编辑过的内容就是最终事实，模型不能下一轮又改回去。
+48. **记忆块和摘要块都计入 system token**：它们和人设合并在同一条 system 里（部分服务商只认第一条），所以 `memory.inject-max-tokens` / `summary-max-chars` 必须守住，否则每轮都在烧输入 token。调整上限时同时看 `llm.max-history-tokens`。
+
+49. **`LlmToolCall` 不能把 name / arguments 摊平**：OpenAI 兼容协议要求 `{id,type:"function",function:{name,arguments}}`；写成 `{id,name,argumentsJson}`，百炼第二轮会报 `function Field required`，表现为工具执行成功但最终回答又回到普通聊天。
+50. **tool 结果回灌必须带 `tool_call_id`**：assistant 的 tool_calls 与 role=tool 消息靠 id 对应；漏了 id 或改 id，模型会把工具结果当成普通用户文本。
+51. **planner 可能无视工具**：即使工具定义里有 `get_blog_post`，模型也可能凭历史摘要回答。System Prompt 已明确“读取站内文章必须调用工具，不能编造”；调工具描述时优先写“什么时候必须用”，不要只写“能做什么”。
+
+### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条，2026-09-25 追加第 6、7 条，2026-10-08 追加第 8 条，2026-11-06 追加第 9、10 条）
 
 首次全量通读时发现三份 README 有 4 处与代码不符，现已按实际情况改写。**这张表留着是为了说明「为什么这几处的措辞是现在这样」**，不要把它们又改回原来的说法。
 
@@ -1252,6 +1546,9 @@ npm run preview      # 本地预览 dist/
 | 7 | `chatbot/sql/init.sql` 末尾备注 2) | 「删除用户目前不是功能，所以 `fk_conversation_owner` 用的是默认的 RESTRICT」 | 删号早已是功能（22 号接口，级联删）。RESTRICT 保留是**刻意的**：级联顺序写在应用层（`AdminUserService.delete`），删用户行之前先抓用户名快照进审计表；改成 `ON DELETE CASCADE` 会把这条线索一起级联掉。本次改写备注并说明别顺手改 CASCADE |
 | 8 | 本文〇「检索入口速查」的「改聊天主界面行为」行 | `ChatView.vue`「前端最大的文件，约 586 行」 | 实际已 **1335 行**（同日改完开场建议题库后是 1338 行）。586 是 2026-09-21 首次通读时的量级，此后陆续加入 Markdown 渲染、图片附件、消息分页、空会话回收、重新生成等，行数翻了一倍多。行数不是契约，只是给接手者「这是个大文件、改动前先按模块定位」的量级感；行数随后又随功能变动，本文只保证量级准确 |
 
+| 9 | 本文 2.2 `CurrentUser.java`、6.2 初始化说明 | `CurrentUser` 只有 3 个字段；`init.sql` 建 3 张表、种子管理员 role=1 | 实际 `CurrentUser` 是 `(id, username, role, systemPrompt)`；`init.sql` 建 5 张表，种子是 role=2 超级管理员。2026-11-06 加博客模块时顺手修正 |
+| 11 | 本文 5.1 LLM 默认模型 / 白名单行 | 仍写着 `qwen3.6-flash,qwen3.7-flash,...`，与 `application.properties` 的 `deepseek-v4.1-flash` / `qwen3.8-flash,qwen3.8-max,deepseek-v4.1-flash` 不一致 | 改为实际默认值。2026-11-06 加记忆功能顺手修正 |
+| 10 | `chatbot/README.md` 配置表 | `llm.available-models` 默认值还是 `qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max` | 实际默认是 `qwen3.8-flash,qwen3.8-max,deepseek-v4.1-flash`（与 `application.properties` 一致）。2026-11-06 加博客时顺手修正 |
 > 顺带在根 `README.md` 的 Documentation Map 里补了一节 **For AI agents**，指向 `AGENTS.md`，并说明它被 gitignore、新克隆的仓库里看不到时应直接以本文为准。
 
 ---
@@ -1292,5 +1589,11 @@ npm run preview      # 本地预览 dist/
 | 2026-10-08（第四次） | **文档精简 + 中文统一**。三份 README 只留各自的定位（根 README 只讲启动、两个模块 README 只讲契约与取舍），删掉与本文重复的结构性内容并把细节指向本文；根 README 从英文改写为中文，去掉「越权访问一律 404」这类应在本文展开的细节。顺带修本文硬伤：九、安全设计要点与十二、扩展点的编号重排连续（此前存在重复的 18/19 与乱序的 6），删掉九里夹在列表中间的分隔线；5.1 与 10.2 里过时的类名 `AdminUserInitializer` 改回 `SeedUserInitializer`；修复 2.2 controller 表两行错位的单元格分隔，并补回第十四节被空行与分隔线截断的表格。 |
 | 2026-10-08（第五次） | **顺手体检**：〇「检索入口速查」里 `ChatView.vue` 的行数从 586 更正为 1335——586 是 2026-09-21 首次通读时的值，之后 Markdown 渲染、图片附件、消息分页、空会话回收、重新生成等陆续落地，行数已翻倍。纯文档更正，无代码改动；13.3 追加第 8 条 |
 | 2026-10-08（第六次） | **空状态开场建议从写死的三条改为题库随机**。新增 `chatbot-web/src/data/openingSuggestions.ts`：5 个领域（技术 / 科普 / 生活 / 职场 / 人文）各 20 条、共 100 条，导出 `drawSuggestions()` 用**洗牌发牌**抽三条，不是每次 `Math.random()`——100 条里随机抽 3 条反复撞车是常态。`ChatView.vue` 的 `SUGGESTIONS` 常量换成 `ref`，`newConversation()` 里在 `canCreateConversation` 守卫之后重抽（只在真进空状态时才换）。选题刻意只写「讲讲 / 解释一下」型、不写「我该不该…」型（避免模型给医疗 / 法律 / 理财的结论性建议），也不写需要精确外部事实的问题（不联网时会编）。2.1 目录树、4.1 文件清单、4.2 空状态行与 `chatbot-web/README.md` 目录结构段同步。验证：`npm run type-check` 与 `npm run build` 通过；用 Node 直跑题库模块实测「抽满一轮 100 条不重复、连抽 50 轮每轮 3 条互异」 |
-*最后更新：2026-10-08*
-
+| 2026-10-30 | **新增 `REQUIREMENTS.md`（需求说明书）**：按用户视角整理产品需求，覆盖账号 / 会话 / 聊天 / 管理后台 / 通用体验五个部分、14 条业务规则、10 条验收场景、暂不提供范围与待确认问题；只描述用户能做什么，不写接口、错误码和实现细节。同步更新「文档分工」表与根 `README.md` 的文档地图。纯文档新增，无代码改动 |
+| 2026-11-06 | **新增博客模块（一期：所有启用用户直接发布）**。后端新增 `blog_post` 表 + `BlogPost` / `PostStatus`；6 个接口：`GET /api/blog/posts`、`GET /api/blog/posts/{id}`、`POST /api/blog/posts`、`PUT /api/blog/posts/{id}`、`DELETE /api/blog/posts/{id}`、`GET /api/blog/mine`；列表走 `BlogPostSummaryView` 接口投影（不取 LONGTEXT 正文）并按 `status + published_at` 走复合索引；发布状态收口在 `BlogPolicy.initialStatus()`，一期恒 `PUBLISHED`，二期审批只改策略。删号级联增加 `blogPost.deleteByAuthorId`。前端新增 `/blog` 列表（全部 / 我的 tab）、详情、Markdown 编辑器（textarea + 预览），路由 `meta.moduleId=blog` 自动进导航；正文复用 `MarkdownContent`（html:false + DOMPurify），不使用 v-html。验证：Java 26 编译、后端启动、6 个接口真实调用（发文 / 列表 / 详情 / 编辑 / 删除 / 我的）、越权编辑删除 404、`size=101` 400、`npm run type-check` 与 `npm run build` 全部通过。 |
+| 2026-11-06（第二次） | **模块导航改为可折叠侧边栏**：解决「左侧只有图标，必须点进去才知道模块是什么」的发现问题。`ModuleNav.vue` 默认展开 176px，导航项显示「图标 + 文字」；顶部按钮收起到 56px 只留图标，折叠态保留原生 `title` / `aria-label`；展开状态写 localStorage 的 `chatbot.navExpanded`（默认展开，隐私模式写入失败不影响本次会话）。底部账号按钮展开态显示「头像 + 名字」，菜单仍贴导航条右侧弹出。条目派生、权限过滤、激活态逻辑均未改。4.1 ModuleNav 行、`chatbot-web/README.md` 目录结构与 `REQUIREMENTS.md` U-09 同步。验证：`npm run type-check` 与 `npm run build` 通过。 |
+| 2026-11-06（第三次） | **新增 AI 长期记忆 + 会话摘要（第一期）**。`sys_user` 加 `memory_enabled`；`conversation` 加 `summary` / `summary_up_to_message_id` / `summary_updated_at`；新表 `user_memory`。后端新增 `MemoryService`（手动 CRUD + Prompt 注入）、`MemoryExtractionService`（SSE 结束后异步抽取）、`MemoryStoreService`（校验 / 去重 / 短事务）、`ConversationSummaryService`（阈值触发摘要）、`LlmTextService` / `UtilityModel` / `MemoryText`；6 个接口（5 个记忆 CRUD + 1 个开关）。前端新增 `api/memory.ts`、`MemoryDialog.vue`、ProfileView 的 AI 记忆卡片与总开关。验证：Java 26 编译、后端启动、记忆 CRUD / 跨用户 404 / 下一轮 lastUsedAt 注入、`npm run type-check` / `npm run build`、`mvnw test`（含 MemoryTextTest / ConversationSummaryStoreTest）全部通过。 |
+| 2026-11-06（第四次） | **清理界面说明文案**：删除各弹窗与表单里重复或意义不大的占位提示、说明段和长 tooltip（登录、新建用户、重置密码、批量重置、修改密码、系统提示词、AI 记忆、个人信息、博客、聊天输入区等），只保留少量关键警示（一次性密码、登录态失效、删除不可恢复）。`ProfileView.vue` 去掉「登录名不可修改……」「统计的是你自己名下的数据……」等说明；`ChatView.vue` 去掉空状态副标题、输入框长占位和模型免责声明。纯文案调整，无接口、数据结构或交互变化。验证：`npm run type-check`、`npm run build` 通过。 |
+| 2026-11-06（第五次） | **聊天页删除会话改用网页内确认框**。`ChatView.vue` 不再调用 `window.confirm`，改为复用 `components/common/ConfirmDialog.vue`：点删除先记录目标会话，确认框里显示会话标题，确认期间按钮 busy，删除成功或失败后关闭；失败仍走顶部 `fatalError` 横幅。验证：`npm run type-check`、`npm run build` 通过。 |
+| 2026-11-06（第六次） | **新增 Agent 工具调用闭环（MVP：只读工具）**。LLM 层新增 `LlmTool` / `LlmToolCall` / `LlmTurn`，`LlmMessage` 支持 `tool_calls` / `tool_call_id`，`LlmClient` 增加非流式 `completeChat`；新增 3 个工具 `search_blog` / `get_blog_post` / `calculator`、`ToolRegistry`、`AgentService`；SSE 增加 `agent_status` / `tool_call` / `tool_result`；新表 `agent_tool_call` + 工具调用审计；前端新增 `AgentTimeline.vue` 和 ChatView 工具步骤状态。真实调用验证：站内搜索命中、读取文章正文、计算 128×37=4736。验证：Java 26 编译、后端启动、真实工具调用、`mvnw test`、`npm run type-check` / `npm run build` 通过。 |
+*最后更新：2026-11-06*

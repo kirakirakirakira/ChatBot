@@ -58,7 +58,7 @@ function formatTime(iso: string): string {
     <header class="admin-head">
       <div>
         <h1 class="admin-title">操作记录</h1>
-        <p class="admin-sub">共 {{ total }} 条 · 只记成功的写操作，与业务同事务（回滚不留痕）</p>
+        <p class="admin-sub">共 {{ total }} 条</p>
       </div>
       <RouterLink class="btn-ghost head-link" to="/admin/users">返回用户管理</RouterLink>
     </header>

@@ -18,6 +18,12 @@ public class MockLlmClient implements LlmClient {
     }
 
     @Override
+    public LlmTurn completeChat(List<LlmMessage> messages, LlmCallOptions options) {
+        // Mock 不解析工具；AgentService 在没有 API Key 时本来就会跳过 planner。
+        return new LlmTurn("", List.of());
+    }
+
+    @Override
     public void streamChat(List<LlmMessage> messages, LlmCallOptions options, LlmStreamListener listener) {
         String lastUser = "";
         String systemPrompt = null;

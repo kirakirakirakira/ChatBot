@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { UiMessage } from '@/types'
 import AttachmentThumb from '@/components/AttachmentThumb.vue'
+import AgentTimeline from '@/components/AgentTimeline.vue'
 import MarkdownContent from '@/components/MarkdownContent.vue'
 
 defineProps<{
@@ -27,6 +28,13 @@ const emit = defineEmits<{
         <AttachmentThumb v-for="(a, i) in message.attachments" :key="a.id ?? 'local-' + i" :attachment="a" />
       </div>
 
+      <!-- Agent 工具调用时间线：先于正文出现，让用户知道模型在搜什么 / 读什么 -->
+      <AgentTimeline
+        v-if="message.role === 'assistant' && ((message.agentSteps?.length ?? 0) > 0 || message.agentStatus)"
+        :steps="message.agentSteps ?? []"
+        :status="message.agentStatus"
+      />
+
       <!-- 思考过程：生成中默认展开，结束后收起，可手动再展开。
            :open 绑成 undefined 而不是 false：open="false" 这个属性只要存在就生效。 -->
       <details v-if="message.reasoning" class="reasoning" :open="message.streaming || undefined">
@@ -42,7 +50,10 @@ const emit = defineEmits<{
         :streaming="message.streaming"
       />
       <div v-else-if="message.content" class="user-text">{{ message.content }}</div>
-      <div v-else-if="message.streaming && !message.reasoning" class="placeholder">等待模型响应…</div>
+      <div
+        v-else-if="message.streaming && !message.reasoning && !message.agentStatus && (message.agentSteps?.length ?? 0) === 0"
+        class="placeholder"
+      >等待模型响应…</div>
 
       <div v-if="message.error" class="error">⚠ {{ message.error }}</div>
 
@@ -62,7 +73,7 @@ const emit = defineEmits<{
           v-if="canRegenerate"
           class="regen"
           type="button"
-          title="删掉这条回答，用同一条问题重新生成"
+          title="重新生成"
           @click="emit('regenerate')"
         >
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /><path d="M3 21v-5h5" /></svg>

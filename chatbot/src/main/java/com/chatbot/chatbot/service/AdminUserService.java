@@ -13,9 +13,12 @@ import com.chatbot.chatbot.dto.UpdateStatusRequest;
 import com.chatbot.chatbot.dto.UserAdminOptionsVO;
 import com.chatbot.chatbot.entity.AuditAction;
 import com.chatbot.chatbot.entity.User;
+import com.chatbot.chatbot.repository.AgentToolCallRepository;
 import com.chatbot.chatbot.repository.AttachmentRepository;
+import com.chatbot.chatbot.repository.BlogPostRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
 import com.chatbot.chatbot.repository.MessageRepository;
+import com.chatbot.chatbot.repository.UserMemoryRepository;
 import com.chatbot.chatbot.repository.UserRepository;
 import com.chatbot.chatbot.repository.UserSpecifications;
 import org.springframework.data.domain.Page;
@@ -71,6 +74,9 @@ public class AdminUserService {
     private final ConversationRepository conversationRepository;
     private final MessageRepository messageRepository;
     private final AttachmentRepository attachmentRepository;
+    private final BlogPostRepository blogPostRepository;
+    private final UserMemoryRepository userMemoryRepository;
+    private final AgentToolCallRepository agentToolCallRepository;
     private final PasswordEncoder passwordEncoder;
     private final AdminAuditService adminAuditService;
 
@@ -78,12 +84,18 @@ public class AdminUserService {
                             ConversationRepository conversationRepository,
                             MessageRepository messageRepository,
                             AttachmentRepository attachmentRepository,
+                            BlogPostRepository blogPostRepository,
+                            UserMemoryRepository userMemoryRepository,
+                            AgentToolCallRepository agentToolCallRepository,
                             PasswordEncoder passwordEncoder,
                             AdminAuditService adminAuditService) {
         this.userRepository = userRepository;
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.attachmentRepository = attachmentRepository;
+        this.blogPostRepository = blogPostRepository;
+        this.userMemoryRepository = userMemoryRepository;
+        this.agentToolCallRepository = agentToolCallRepository;
         this.passwordEncoder = passwordEncoder;
         this.adminAuditService = adminAuditService;
     }
@@ -230,7 +242,7 @@ public class AdminUserService {
     }
 
     /**
-     * 删号，连他的会话、消息、附件一起删。
+     * 删号，连他的 AI 记忆、会话、消息、附件、博客文章一起删。
      * <p>
      * 刻意不做「软删除」：sys_user 没有 deleted 标记列，conversation.owner_id 是 NOT NULL + RESTRICT，
      * 想把用户行留着就得给所有会话找一个「已注销」的替身用户，反而造出一个谁都能看见的幽灵账号。
@@ -248,13 +260,20 @@ public class AdminUserService {
         // 都是 RESTRICT，先删父行会直接撞 errno 1451。和 ConversationService.delete 是同一套顺序，
         // 只是这里按 owner 一次删完，不用逐个会话循环。
         String targetName = user.getUsername();
+        // user_memory.user_id 也是 RESTRICT；记忆是用户私有数据，删号必须一起删
+        userMemoryRepository.deleteByUserId(id);
+        // 工具日志没有外键，按 user_id 一并清掉
+        agentToolCallRepository.deleteByUserId(id);
         attachmentRepository.deleteByOwnerId(id);
         messageRepository.deleteByOwnerId(id);
         conversationRepository.deleteByOwnerId(id);
+        // blog_post.author_id 也是 RESTRICT：文章必须先删，否则删用户行会撞 1451。
+        // 博客是全站可读内容，删号即删文是当前产品规则；以后若要保留文章，得先把 author_id 改成可空 + 作者名快照。
+        blogPostRepository.deleteByAuthorId(id);
         userRepository.delete(user);
         // 目标行已经没了，靠删前抓的名字快照认人（审计表不建外键，见 AdminAuditLog 类注释）
         adminAuditService.record(actor, AuditAction.DELETE_USER, id, targetName,
-                "级联删除其名下的会话 / 消息 / 附件");
+                "级联删除其名下的会话 / 消息 / 附件 / 博客文章 / AI 记忆");
     }
 
     private Pageable pageable(Integer page, Integer size) {

@@ -35,6 +35,18 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
     int updateTitle(@Param("id") Long id, @Param("ownerId") Long ownerId, @Param("title") String title);
 
     /**
+     * 只更新摘要及覆盖游标，不触发 @PreUpdate 刷新 updated_at——摘要是后台行为，
+     * 不该把会话顶到列表最前面。调用方需自带事务。
+     */
+    @Modifying
+    @Query("update Conversation c set c.summary = :summary, c.summaryUpToMessageId = :upTo, "
+            + "c.summaryUpdatedAt = :updatedAt where c.id = :id")
+    int updateSummary(@Param("id") Long id,
+                      @Param("summary") String summary,
+                      @Param("upTo") Long upTo,
+                      @Param("updatedAt") java.time.LocalDateTime updatedAt);
+
+    /**
      * 删用户时连带删他的全部会话：管理员删号不该留下一堆 owner_id 指向不存在用户的孤儿会话。
      * <p>
      * 顺序上它夹在中间——必须排在删附件 / 消息之后（它们是 RESTRICT 的子表），

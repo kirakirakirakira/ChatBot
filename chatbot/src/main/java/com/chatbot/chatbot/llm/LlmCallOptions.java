@@ -1,5 +1,7 @@
 package com.chatbot.chatbot.llm;
 
+import java.util.List;
+
 /**
  * 单次模型调用的选项。把 model / 思考开关 / 思考预算从 streamChat 的形参里收进一个 record，
  * 以后再加参数（temperature 之类）不用改接口签名。
@@ -12,6 +14,21 @@ package com.chatbot.chatbot.llm;
  * @param enableSearch   联网搜索（Chat Completions 的 enable_search 参数）。true 才下发；
  *                       搜索策略固定用默认 turbo（qwen3.8 系在兼容协议下不支持 agent），
  *                       计费约 3 元/千次 + 检索内容带来的输入 token，所以默认关
+ * @param tools          本次暴露给模型的工具定义；空列表表示普通聊天
+ * @param toolChoice     OpenAI 兼容的 tool_choice；auto / required / none 或具体函数名
+ * @param maxTokens      planner 调用的输出上限；普通聊天不传
  */
-public record LlmCallOptions(String model, Boolean enableThinking, Integer thinkingBudget, Boolean enableSearch) {
+public record LlmCallOptions(
+        String model,
+        Boolean enableThinking,
+        Integer thinkingBudget,
+        Boolean enableSearch,
+        List<LlmTool> tools,
+        String toolChoice,
+        Integer maxTokens) {
+
+    /** 兼容原来的四参构造：普通聊天 / 记忆抽取 / 摘要不传工具。 */
+    public LlmCallOptions(String model, Boolean enableThinking, Integer thinkingBudget, Boolean enableSearch) {
+        this(model, enableThinking, thinkingBudget, enableSearch, List.of(), null, null);
+    }
 }
