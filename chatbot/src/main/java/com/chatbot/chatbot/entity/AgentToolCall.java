@@ -37,8 +37,19 @@ public class AgentToolCall {
     @Column(name = "call_id", nullable = false, length = 64)
     private String callId;
 
+    /**
+     * 这条工具调用属于哪条助手消息。可空：写入发生在消息入库之前，ChatService 拿到 messageId 后回填；
+     * 旧数据 / 中断在规划阶段的调用保持 NULL，不回放。
+     */
+    @Column(name = "message_id")
+    private Long messageId;
+
     @Column(name = "tool_name", nullable = false, length = 64)
     private String toolName;
+
+    /** 中文展示名快照（工具改 label 后，旧时间线仍显示当时的名字）。 */
+    @Column(name = "tool_label", length = 64)
+    private String toolLabel;
 
     @Column(name = "arguments_json", columnDefinition = "LONGTEXT")
     private String argumentsJson;
@@ -97,6 +108,22 @@ public class AgentToolCall {
 
     public String getToolName() {
         return toolName;
+    }
+
+    public Long getMessageId() {
+        return messageId;
+    }
+
+    public void setMessageId(Long messageId) {
+        this.messageId = messageId;
+    }
+
+    public String getToolLabel() {
+        return toolLabel;
+    }
+
+    public void setToolLabel(String toolLabel) {
+        this.toolLabel = toolLabel;
     }
 
     public void setToolName(String toolName) {

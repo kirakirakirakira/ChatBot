@@ -32,7 +32,7 @@
 | 仓库根 | `D:/workspace/chatbot`（两个平级子项目，**不是** Maven/npm 多模块工程，没有父 pom、没有 workspace） |
 | 后端 | `chatbot/`，Spring Boot 4.1.1 + Java 26 + Maven，包根 `com.chatbot.chatbot`，端口 **8089** |
 | 前端 | `chatbot-web/`，Vue 3.5 + TypeScript 6 + Vite 8，端口 **5173**，`/api` 代理到 8089 |
-| 数据库 | MySQL 8，库名 `chatbot`，共 **7 张表**：`sys_user` / `conversation` / `message` / `attachment`（图片字节直接存 LONGBLOB）/ `blog_post` / `user_memory` / `agent_tool_call`（工具调用日志） |
+| 数据库 | MySQL 8，库名 `chatbot`，共 **9 张表**：`sys_user` / `conversation` / `message` / `attachment`（图片字节直接存 LONGBLOB）/ `blog_post` / `user_memory` / `agent_tool_call`（工具调用日志）/ `message_citation`（回答引用卡）/ `admin_audit_log`（管理端操作审计） |
 | LLM | `llm.api-key` 有值 → `OpenAiCompatibleLlmClient`；为空 → `MockLlmClient`（本地假回复，链路照样能跑通）。支持 Agent planner：工具定义随请求下发，模型返回 `tool_calls` 后由后端执行 |
 | 鉴权 | 自签 HMAC-SHA256 token（不用 JWT 库、不用 Spring Security starter），白名单**只有** `POST /api/auth/login` |
 | 默认账号 | `admin` / `admin`，**超级管理员**（`sql/init.sql` 的 `INSERT IGNORE` 与 `SeedUserInitializer` 二选一兜底创建；种子必须是超管，理由见 8.6）。另有**每个角色一个测试账号**：`test_super` / `test_admin` / `test_user` / `test_guest`，密码统一 `test123456`（`auth.seed-test-users=false` 或 `AUTH_SEED_TEST_USERS=false` 关掉），层级权限「谁能管谁」只有四个不同角色的账号同时在库里才点得出来 |
@@ -113,20 +113,20 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 │       ├── main/java/com/chatbot/chatbot/
 │       │   ├── ChatbotApplication.java
 │       │   ├── auth/           # 8 个文件：token 签发校验 + 拦截器 + 当前用户注入 + 角色 + 账号状态
-│       │   ├── config/         # 9 个文件：Web/CORS、BCrypt、LLM Bean、AI 记忆配置、Agent 配置、种子账号、全局异常
+│       │   ├── config/         # 10 个文件：Web/CORS、BCrypt、LLM Bean、AI 记忆配置、Agent 配置、种子账号、全局异常、全文索引补建
 │       │   ├── controller/     # 10 个文件：Auth / Conversation / Chat / User / UserMemory / Llm / Attachment / AdminUser / AdminAudit / Blog
-│       │   ├── dto/            # 37 个文件：请求体、响应 VO、SSE 事件、统一错误体、管理端 PageVO/AdminUserVO/AdminAuditLogVO、批量 BatchUser*、个人资料、博客、AI 记忆 UserMemoryVO/CreateMemoryRequest/UpdateMemoryRequest/UpdateMemorySettingsRequest 等
-│       │   ├── entity/         # 14 个文件：User / Conversation / Message / Attachment / Role / AdminAuditLog / AuditAction / BlogPost / PostStatus / UserMemory / MemoryKind / MemorySource / MemoryStatus / AgentToolCall
+│       │   ├── dto/            # 38 个文件：请求体、响应 VO、SSE 事件、统一错误体、管理端 PageVO/AdminUserVO/AdminAuditLogVO、批量 BatchUser*、个人资料、博客、AI 记忆 UserMemoryVO/CreateMemoryRequest/UpdateMemoryRequest/UpdateMemorySettingsRequest 等
+│       │   ├── entity/         # 15 个文件：User / Conversation / Message / Attachment / Role / AdminAuditLog / AuditAction / BlogPost / PostStatus / UserMemory / MemoryKind / MemorySource / MemoryStatus / AgentToolCall / MessageCitation
 │       │   ├── llm/            # 11 个文件：客户端抽象 + OpenAI 兼容实现 + Mock + 配置 + 调用选项 + 多模态 content 段 + LlmTool / LlmToolCall / LlmTurn
-│       │   ├── repository/     # 9 个文件：Spring Data JPA 接口 + UserMemoryRepository + AgentToolCallRepository + UserSpecifications（Criteria 查询条件）
-│       │   ├── service/        # 21 个文件：聊天 / 会话 / 用户 / 附件 / 管理 / 博客 / 记忆 + AgentService / AgentObserver / AgentToolCallStore + LlmText / UtilityModel / ExtractedMemory 等
-│       │   └── tool/           # 7 个文件：Tool 接口 / ToolContext / ToolResult / ToolRegistry + search_blog / get_blog_post / calculator
+│       │   ├── repository/     # 10 个文件：Spring Data JPA 接口 + UserMemoryRepository + AgentToolCallRepository + MessageCitationRepository + UserSpecifications（Criteria 查询条件）
+│       │   ├── service/        # 23 个文件：聊天 / 会话 / 用户 / 附件 / 管理 / 博客 / 记忆 / 历史检索 + AgentService / AgentObserver / AgentToolCallStore / MessageCitationStore + LlmText / UtilityModel / ExtractedMemory 等
+│       │   └── tool/           # 11 个文件：Tool 接口 / ToolContext / ToolResult / ToolCitation / ToolRegistry + search_blog / get_blog_post / calculator / search_my_history / read_conversation / list_my_conversations
 │       ├── main/resources/
 │       │   ├── application.properties          # 主配置（提交进仓库）
 │       │   └── application-local.properties    # 本地真实密钥（gitignore）
 │       └── test/java/com/chatbot/chatbot/
 │           ├── ChatbotApplicationTests.java   # 空 contextLoads（需真 MySQL）
-│           └── service/ + tool/               # MemoryTextTest / ConversationSummaryStoreTest / AgentToolCallStoreTest / CalculatorToolTest / SearchBlogToolTest
+│           └── service/ + tool/               # MemoryTextTest / ConversationSummaryStoreTest / AgentToolCallStoreTest / HistoryTextTest / HistorySearchServiceTest / MessageCitationStoreTest / CalculatorToolTest / SearchBlogToolTest / SearchMyHistoryToolTest
 │
 └── chatbot-web/                # ← 前端：Vue 3 + Vite + TypeScript
     ├── package.json / package-lock.json
@@ -148,7 +148,7 @@ chatbot/                        # 仓库根（git 仓库在这一层）
         ├── lib/                # markdown.ts：markdown-it + highlight.js + DOMPurify；format.ts：日期展示
         ├── data/               # openingSuggestions.ts：空状态开场建议题库（100 条 / 5 个领域）
         ├── views/              # LoginView、ChatView、ProfileView（个人信息，懒加载）、blog/（博客列表 / 详情 / 编辑器）、admin/UsersView（用户管理，懒加载）、ForbiddenView、NotFoundView
-        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、AttachmentThumb、AgentTimeline、ChangePasswordDialog、SystemPromptDialog、MemoryDialog、UserMenu、ModuleNav、common/ConfirmDialog、admin/、icons/
+        └── components/         # ConversationSidebar、MessageBubble、MarkdownContent、AttachmentThumb、AgentTimeline、AgentStepList、CitationList、ChangePasswordDialog、SystemPromptDialog、MemoryDialog、UserMenu、ModuleNav、common/ConfirmDialog、admin/、icons/
 ```
 
 ### 2.2 后端逐文件清单
@@ -213,13 +213,15 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `AdminUserVO.java` 等 9 个管理端 DTO | `AdminUserVO`（管理表格一行：含 `status` / `statusLabel` / `lastLoginAt` / `mustChangePassword` / **`canManage`（当前操作者能不能管这一行，前端据此锁控件）**，**不含** `systemPrompt`）、`PageVO<T>`（offset 分页壳：`items/page/size/total/totalPages`，`of(Page, mapper)`）、`UserAdminOptionsVO`（角色/状态字典：`roles` 是**可指派**的角色，按操作者层级过滤；`allRoles` 是全量角色，只给列表筛选器用）、`CreateUserRequest` / `UpdateRoleRequest` / `UpdateStatusRequest` / `ResetPasswordRequest`（**刻意不加 bean validation 的条件字段**：`newPassword` 是否必填取决于 `generate`，注解表达不了，校验在 service）/ `ResetPasswordResult` / `AdminAuditLogVO`（审计行，`actionLabel` 中文由 `AuditAction.label()` 给）、`UpdateProfileRequest`（昵称/邮箱/手机号，全空白 = 清空；**刻意不含 username 与 role**）、`UserProfileStatsVO`（三个计数）、批量三件套 `BatchUserAction`（枚举，请求体用 String 接再 `of()` 解析，为的是中文 400）/ `BatchUserRequest`（`ids` 1~100 + 一个动作 + 可选 role/newPassword/generate）/ `BatchUserResultVO`（逐条结果：`requested/succeeded/failed/items`，item 带失败原因与一次性随机密码）。 |
 | `BlogPostSummaryView.java` / `BlogPostSummaryVO.java` / `BlogPostVO.java` / `SaveBlogPostRequest.java` | 博客四件套。`BlogPostSummaryView` 是列表的**接口投影**：只取标题 / 摘要 / 作者名 / 状态 / 时间，**不取 content**，JPQL 里用 `case when` 做「昵称优先、回退用户名」；`BlogPostSummaryVO` 再把 `PostStatus` 转成 `status` + 中文 `statusLabel`。`BlogPostVO` 是详情（多 `content`），`SaveBlogPostRequest` 校验标题 ≤100、摘要 ≤200、正文 ≤50000。 |
 | `ConversationVO.java` | `(id, title, createdAt, updatedAt)` |
-| `MessageVO.java` | `(id, role小写字符串, content, reasoning, model, promptTokens, completionTokens, reasoningTokens, attachments, createdAt)`。`attachments` 是 `List<AttachmentVO>`，**没图时传 null 而不是空数组**（NON_NULL 会把整个字段省掉）。record 上 `@JsonInclude(NON_NULL)`：没有的字段干脆不下发 |
+| `MessageVO.java` | `(id, role小写字符串, content, reasoning, model, promptTokens, completionTokens, reasoningTokens, attachments, citations, createdAt)`。`attachments` 是 `List<AttachmentVO>`，**没图时传 null 而不是空数组**（NON_NULL 会把整个字段省掉）；`citations` 是 `List<MessageCitationVO>`，`toolCalls` 是 `List<MessageToolCallVO>`，两者没有时同样不下发。record 上 `@JsonInclude(NON_NULL)`：没有的字段干脆不下发 |
 | `RenameConversationRequest.java` | `(title)`，`@NotBlank` + `@Size(max=100)`（100 是 `conversation.title` 列宽） |
 | `UpdateSystemPromptRequest.java` | `(systemPrompt)`，`@Size(max=2000)`；全空白 = 清除人设 |
 | `RegenerateRequest.java` | `(enableThinking, model, thinkingBudget)`，整个体可省略；model 不传时沿用被删回答的模型 |
 | `LlmOptionsVO.java` | `(models, defaultModel, visionModels)`：界面模型选择器的数据源。`visionModels` 来自 `llm.vision-models`（`models` 的子集），前端靠它决定显不显示「上传图片」按钮 |
 | `RegenerateRequest.java` | `(enableThinking, model, thinkingBudget, enableSearch)`，整个体可省略（`@RequestBody(required = false)`）；语义与 `ChatRequest` 同名字段一致。**没有 attachmentIds**：重跑用的图片已经挂在原用户消息上，从历史里读 |
 | `MessagePageVO.java` | `(items: List<MessageVO>, beforeId, hasMore)`。消息分页响应：items 已按时间正序，`beforeId` 是往前翻的游标（null = 没有更早的）。**刻意不含 total / 总页数**：算总数要在 LONGTEXT 大表上多跑一次 `count(*)`，每翻一页跑一次不值 |
+| `MessageCitationVO.java` | `(messageId, conversationId, conversationTitle, role, snippet, createdAt, url)`。字段名与 SSE `tool_result.ui.citations` 一致，前端共用 `Citation` 类型；`url` 读时现拼，不落库 |
+| `MessageToolCallVO.java` | `(callId, tool, label, args, status, summary, durationMs)`。刷新后回放的查询步骤；**不含 `result_json`**，避免博客正文这类大字段进消息列表 |
 | `ErrorResponse.java` | `(timestamp, status, error, message, path)`，字段与 Spring 默认 `/error` 输出一致。 |
 
 **entity/ — JPA 实体，表结构的唯一事实源**
@@ -305,6 +307,10 @@ chatbot/                        # 仓库根（git 仓库在这一层）
 | `tool/SearchBlogTool.java` | `search_blog`：只在已发布博客的标题 / 摘要里 LIKE，不扫正文，不返回草稿。 |
 | `tool/GetBlogPostTool.java` | `get_blog_post`：复用 `BlogService.detail`，可见性与博客接口同一口径。 |
 | `tool/CalculatorTool.java` | `calculator`：递归下降解析四则运算，不执行任意脚本。 |
+| `tool/SearchMyHistoryTool.java` | `search_my_history`：跨会话搜索当前用户自己的消息；排除当前会话，返回 `ui.citations` 给前端渲染引用卡。 |
+| `tool/ReadConversationTool.java` | `read_conversation`：按会话 id 读一段上下文，归属校验复用 `ConversationService.requireOwned`。 |
+| `tool/ListMyConversationsTool.java` | `list_my_conversations`：按标题列出自己的会话，只给元信息，不含正文。 |
+| `service/HistorySearchService.java` | 历史检索层：MySQL ngram 全文索引 + 相关性过滤 + LIKE 兜底；`snippet()` 是纯函数。 |
 | `service/AgentService.java` | planner → 工具执行 → 结果回灌 → 再规划的循环；最多 `agent.max-steps` 步。 |
 | `service/AgentObserver.java` | AgentService 与 SSE 的解耦接口：只发 ChatEvent + 检查取消。 |
 | `service/AgentToolCallStore.java` | 工具调用审计的短事务写入。 |
@@ -443,7 +449,9 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `views/ChatView.vue` | **大（前端最大文件）** | 聊天主界面：隐形顶栏（会话标题 + `UserMenu` 头像菜单，「用户管理」项 `router.push('/admin/users')`）、居中限宽 760px 的消息列、空状态问候语 + 开场建议 chips、胶囊合成输入框（自动长高、圆形发送/停止、待发送图片缩略图条 + 粘贴/拖拽传图）。详见 4.2 |
 | `components/ConversationSidebar.vue` | 中 | 纯展示组件。props `conversations`/`activeId`/`canCreate`；emits `select(id)`/`create()`/`remove(id)`/`rename(id, title)`。品牌标 + 虚线「新建对话」；列表项 hover 才浮出重命名/删除图标（盖住时间戳，一行宽度有限）；双击标题或点铅笔行内改名 |
 | `components/MessageBubble.vue` | 小 | 单条消息。**助手消息带头像、不套气泡**（长回答铺在背景上比塞进盒子里好读）；用户消息是浅色圆角 pill。图片缩略图排在文字之前（与发给模型的顺序一致）、思考折叠、Markdown 正文、用量行、hover 才显形的「重新生成」 |
-| `components/AgentTimeline.vue` | 小 | Agent 工具时间线：agent_status 等待态 + tool_call / tool_result 步骤、参数折叠、耗时与错误状态；只在当轮流式期间存在。 |
+| `components/AgentTimeline.vue` | 小 | 查询过程 + 引用卡的统一 `<details>`：流式期间默认展开、可随时手动折叠；刷新 / 切会话后默认折叠。摘要显示「查询过程（N 步）· 引用（M 条）」。 |
+| `components/AgentStepList.vue` | 小 | 工具步骤列表：状态点 + 工具名 + 状态 / 耗时 + 参数折叠 + 结果摘要；展开态与折叠态共用。 |
+| `components/CitationList.vue` | 小 | 引用卡列表：在 `AgentTimeline` 的同一个折叠块里渲染，流式期间从 `agentSteps[].ui` 取，刷新后从 `message.citations` 取。 |
 | `components/AttachmentThumb.vue` | 小 | 一张图的缩略图。`url` 有值就直接用（本地预览，**不 revoke**——所有权归创建方 ChatView）；只有 `id` 时 `onMounted` 里 `fetchAttachmentUrl()` 取字节转 objectURL、`onBeforeUnmount` 里自己 revoke。点击新标签打开原图；取失败显示「加载失败」而不是空白 |
 | `components/ChangePasswordDialog.vue` | 中 | 改密码弹窗。`force` prop：管理员重置过密码时由 AppShell 以**关不掉**的形态弹出（无取消、Esc/遮罩无效），普通入口不传、行为不变。成功后 `emit('changed', result)`，调用方必须 `setSession()` 换上新 token。 |
 | `components/SystemPromptDialog.vue` | 中 | 系统提示词（人设）弹窗，所有人可见。打开时用本地登录态里的 `currentUser.systemPrompt` 回显（不为回显再请求一次 /me）；保存调 `PUT /users/me/system-prompt`，成功后 `emit('changed', user)` 让父组件 `setSession(token, user)` 覆盖本地用户信息——**不用重新登录**。清空保存 = 移除人设 |
@@ -473,7 +481,7 @@ POST /api/conversations/{id}/chat   [Accept: text/event-stream]
 | `messages: UiMessage[]` | 当前会话的消息（**只加载最新一页**，更早的靠「加载更早的消息」往前翻；含正在流式生成的临时项） |
 | `input` | 输入框内容 |
 | `streaming` | 是否正在生成（禁用输入/思考开关，切换「发送」↔「停止」按钮） |
-| `agentSteps` / `agentStatus` | Agent 时间线状态：`tool_call` 建 running 步骤，`tool_result` 回填 ok/error、summary、durationMs；只在当轮流式期间存在。 |
+| `agentSteps` / `agentStatus` | Agent 时间线状态：`tool_call` 建 running 步骤，`tool_result` 回填 ok/error、summary、durationMs、ui（引用卡）。流式期间默认展开、点摘要可随时手动折叠；刷新 / 切会话后从 `MessageVO.toolCalls` 映射回 `agentSteps`，并通过 `agentReplay=true` 默认折叠成「查询过程（N 步）· 引用（M 条）」。 |
 | `loadingMessages` | 历史消息加载中 |
 | `thinkingOn` | 思考模式开关，**默认 `true`**，每条消息显式传给后端。想改用服务端默认值就把它设为 `undefined` 传给 api |
 | `llmModels` / `selectedModel` | 模型选择器：清单来自 `GET /api/llm/options`，选中值存 `localStorage.chatbot.model`；存过的模型若已不在白名单（配置改了），回落到服务端默认而不是留一个会 400 的 id |
@@ -715,7 +723,9 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `id` | `bigint` | PK, AUTO_INCREMENT | |
 | `conversation_id` / `user_id` | `bigint` | NOT NULL，**无外键** | 删会话 / 删用户由应用层清理，日志不反过来挡住删除 |
 | `call_id` | `varchar(64)` | NOT NULL, UNIQUE `uk_agent_tool_call_id` | 模型给的 tool_call id |
-| `tool_name` | `varchar(64)` | NOT NULL | `search_blog` / `get_blog_post` / `calculator` |
+| `message_id` | `bigint` | NULL, idx `idx_agent_tool_call_message` | 所属助手消息；消息入库后回填。旧数据为 NULL = 不回放 |
+| `tool_name` | `varchar(64)` | NOT NULL | `search_blog` / `get_blog_post` / `calculator` / `search_my_history` / `read_conversation` / `list_my_conversations` |
+| `tool_label` | `varchar(64)` | NULL | 中文展示名快照（工具改名后旧时间线仍显示当时的名字） |
 | `arguments_json` / `result_json` | `longtext` | NULL | 原始参数与完整结构化结果 |
 | `result_summary` | `text` | NULL | 给人和模型看的短结果 |
 | `status` | `varchar(16)` | NOT NULL | 当前只有 `OK` / `ERROR`；二期写工具再扩展审批状态 |
@@ -724,6 +734,24 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `created_at` | `datetime(6)` | NOT NULL | |
 
 > 工具日志是审计 / 排查数据，不参与 Prompt。回灌给模型的版本由 `AgentService` 按 `agent.max-result-chars` 截断，避免一次搜索结果把上下文撑爆。
+
+**`message_citation`（回答引用卡）** — 实体 `entity/MessageCitation.java`
+
+| 列 | 类型 | 约束 | 说明 |
+|---|---|---|---|
+| `id` | `bigint` | PK, AUTO_INCREMENT | |
+| `message_id` | `bigint` | NOT NULL, idx `idx_message_citation_message` | 助手消息 id，引用的展示归属 |
+| `conversation_id` | `bigint` | NOT NULL, idx `idx_message_citation_conversation` | 助手消息所在会话；删会话 / 删用户按它清理 |
+| `cited_message_id` | `bigint` | NULL | 被引用消息 id；NULL = 只有会话级命中 |
+| `cited_conversation_id` | `bigint` | NOT NULL | 被引用会话 id |
+| `conversation_title` | `varchar(120)` | NOT NULL | 标题快照：会话以后改名，旧回答仍显示当时的标题 |
+| `role` | `varchar(16)` | NULL | user / assistant；会话级命中为 NULL |
+| `snippet` | `varchar(500)` | NULL | 展示片段 |
+| `quoted_at` | `datetime(6)` | NULL | 被引用内容的时间；会话级命中是会话更新时间 |
+| `source` | `varchar(32)` | NOT NULL DEFAULT 'HISTORY' | 来源工具，留给以后博客 / 文件引用 |
+| `created_at` | `datetime(6)` | NOT NULL | |
+
+> **为什么不复用 `agent_tool_call`**：工具日志是审计数据，引用是「这条回答展示了什么」的产品数据；两者生命周期不同，回放 UI 也不该去解析审计 JSON。`url` 不落库，读时按 `cited_*` 现拼，路由变了不用迁移。刻意不建外键：删会话 / 删用户由应用层显式清理，漏删最多是孤儿行，不会像 RESTRICT 那样把删除卡死。
 
 **`message`（消息）** — 实体 `entity/Message.java`
 
@@ -741,6 +769,8 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `created_at` | `datetime(6)` | NOT NULL | |
 
 > 思考过程（reasoning）**随助手消息一起入库**（`message.reasoning`，可空 LONGTEXT）：刷新页面后折叠块还能展开重读。正文 `content` 仍然只含 `delta` 拼出来的正式回答，思考不会混进正文、也不会进送给模型的历史。空白思考存 NULL 而不是空串——前端靠「有没有值」决定要不要渲染折叠块。
+
+> **`ft_message_content` 全文索引**（2026-11-06 加入）：`FULLTEXT KEY (content) WITH PARSER ngram`。中文必须用 ngram，默认分词器按空格切、中文整段会被当成一个词。索引由 `config/MessageSearchIndexInitializer` 在启动时幂等补建（只跑 `ddl-auto=update` 的库也能用）；建不出来只 warn，`HistorySearchService` 自动回退 `LIKE '%关键词%'`。
 
 **`attachment`（图片附件）** — 实体 `entity/Attachment.java`，2026-09-24 加入
 
@@ -796,7 +826,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 
 两条等价路径，任选其一：
 
-1. 执行 `chatbot/sql/init.sql`：建库（`utf8mb4` / `utf8mb4_unicode_ci`）+ 建 7 张表 + `INSERT IGNORE` 种子管理员 `admin`（`admin` 的 BCrypt cost=10 哈希，role=2 超级管理员）。全部 `IF NOT EXISTS` / `INSERT IGNORE`，**脚本可重复执行**，也不会把改过的密码覆盖回 `admin`。
+1. 执行 `chatbot/sql/init.sql`：建库（`utf8mb4` / `utf8mb4_unicode_ci`）+ 建 9 张表 + `INSERT IGNORE` 种子管理员 `admin`（`admin` 的 BCrypt cost=10 哈希，role=2 超级管理员）。全部 `IF NOT EXISTS` / `INSERT IGNORE`，**脚本可重复执行**，也不会把改过的密码覆盖回 `admin`。
 2. 直接启动后端：`ddl-auto=update` 自动建表，`SeedUserInitializer` 在 `sys_user` 为空时自动建默认管理员。
 
 **同步规则**：表结构的唯一事实源是 `entity/` 下的实体类。改实体后必须同步 `sql/init.sql`——`ddl-auto=update` 只补新表新列，**不会修改或删除已有列**，两边不一致时脚本会悄悄过期。 另外 `init.sql` 末尾有一段「已有库升级」注释（2026-09-24 会话归属那次留下的迁移 SQL）：给**已经有数据的旧库**手工执行 ALTER 用。以后再做破坏性结构变更，请往那段下面追加，别只改 CREATE TABLE——`IF NOT EXISTS` 对旧库是空操作。
@@ -938,10 +968,14 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 // ConversationVO
 { "id": 12, "title": "新的对话", "createdAt": "...", "updatedAt": "..." }
 
-// MessageVO —— role 是小写字符串；attachments 只有用户消息会有，没图时整个字段不下发
+// MessageVO —— role 是小写字符串；attachments 只有用户消息会有，citations 只有回答会有；没有时整个字段不下发
 { "id": 34, "role": "user", "content": "你好", "createdAt": "..." }
 { "id": 40, "role": "user", "content": "这张图里有什么？", "attachments": [ { "id": 9, "mime": "image/png", "fileName": "dashboard.png", "size": 12427 } ], "createdAt": "..." }
 { "id": 35, "role": "assistant", "content": "…", "reasoning": "…", "model": "qwen3.8-flash", "promptTokens": 4, "completionTokens": 30, "reasoningTokens": 12, "createdAt": "..." }
+// 带引用卡的回答（历史检索）：messageId = 被引用的消息 id；只有会话级命中时为 null
+{ "id": 36, "role": "assistant", "content": "…", "citations": [ { "messageId": 190, "conversationId": 73, "conversationTitle": "记录一个事实…", "role": "assistant", "snippet": "…", "createdAt": "2026-11-06T15:55:55", "url": "/chat?c=73&m=190" } ], "createdAt": "..." }
+// 带查询时间线的回答：toolCalls 只含精简字段，刷新后前端折叠成「查询过程（2 步）」
+{ "id": 37, "role": "assistant", "content": "…", "toolCalls": [ { "callId": "call_1", "tool": "search_my_history", "label": "搜索我的历史对话", "args": { "query": "项目代号" }, "status": "OK", "summary": "找到 5 条…", "durationMs": 49 } ], "createdAt": "..." }
 
 
 // MessagePageVO —— GET /api/conversations/{id}/messages 的响应（分页）
@@ -1027,7 +1061,7 @@ App.vue  （RouterView + 掉登录态回登录页的全局 watch）
 | `error` | `{"type":"error","content":"..."}` | 出错。**文案在 `content`，不是 `message` 字段** |
 | `agent_status` | `{"type":"agent_status","content":"正在分析是否需要调用工具…"}` | Agent 正在规划 / 整理；前端时间线显示等待态。 |
 | `tool_call` | `{"type":"tool_call","callId":"call_1","tool":"search_blog","label":"搜索站内博客","args":{"query":"SSE"}}` | 模型发起一次工具调用；后端已校验工具名，执行前推送。 |
-| `tool_result` | `{"type":"tool_result","callId":"call_1","status":"OK","summary":"找到 1 篇","durationMs":19}` | 工具执行结束；失败时 `status=ERROR`，`summary` 是原因。 |
+| `tool_result` | `{"type":"tool_result","callId":"call_1","status":"OK","summary":"找到 1 条历史消息","durationMs":50,"ui":{"citations":[{"key":"m-190","messageId":190,"conversationId":73,"conversationTitle":"…","role":"assistant","snippet":"…","createdAt":"2026-11-06T15:55:55","url":"/chat?c=73&m=190"}]}}` | 工具执行结束；失败时 `status=ERROR`，`summary` 是原因。`ui` 是可选的展示数据（目前只有历史检索会带），**只给前端当轮渲染，自身不落库、不回灌模型**；为空时字段整个省略。其中 citations 由后端的 typed `ToolCitation` 另存到 `message_citation`，刷新后随 `GET /messages` 返回。 |
 
 约定：前端遇到不认识的 `type` **直接忽略**（`api.ts` 的 `switch` 没有 default 分支），保持向后兼容；新增事件类型时老前端不会崩。
 
@@ -1119,7 +1153,7 @@ ChatService.stream()
              推 SSE tool_call
              ToolRegistry 找工具（白名单）
              虚拟线程执行，20 秒超时
-             推 SSE tool_result
+             推 SSE tool_result（带可选 ui，如引用卡）
              写 agent_tool_call
              role=tool 结果入 messages
            回到第 2 步，最多 5 步
@@ -1133,7 +1167,9 @@ ChatService.stream()
 - **planner 失败自动回退**：模型不支持 tools / 400 / 超时，直接返回原 history 走普通聊天，不让整轮失败。
 - **工具结果回灌格式**：`{status, summary, data}` 的 JSON，超过 `agent.max-result-chars` 截断；完整结果落 `agent_tool_call`。
 - **工具白名单**：模型只能调用 `ToolRegistry` 里存在的工具；未知工具变成一条 ERROR tool 结果，不会执行任何真实动作。
-- **当前只读**：`search_blog` / `get_blog_post` / `calculator` 都不改数据。写工具二期再加审批与幂等。
+- **当前只读**：`search_blog` / `get_blog_post` / `calculator` / `search_my_history` / `read_conversation` / `list_my_conversations` 都不改数据。写工具二期再加审批与幂等。
+- **历史检索的权限边界**：`search_my_history` 的 SQL 一律 `join conversation` 并带 `owner_id`，只搜当前用户；默认排除当前会话（它已经在上下文里）。`read_conversation` 复用 `ConversationService.requireOwned`，别人的会话一律 404。ngram 命中后再做一道 bigram 覆盖率 / 完整子串过滤，避免「只命中『检索』这种常见词」的噪声。
+- **深链**：引用卡链接是 `/chat?c=<会话 id>&m=<消息 id>`。`ChatView` 优先按这个 query 打开；消息不在最新一页时，用现有 `before` 游标取一页让目标落进窗口，不新增「按消息 id 查整段」的接口。顶部显示「已定位到历史消息 / 回到最新」。
 
 ### 8.1.2 AI 记忆与会话摘要
 
@@ -1356,7 +1392,7 @@ GET /api/blog/posts?page&size
 
 28. **AI 记忆是用户私有数据**：所有记忆接口固定走 `/api/users/me/memories`，目标用户只来自 token；管理员没有查看别人记忆的接口，删号时 `user_memory` 一并硬删。记忆是「背景资料」不是系统指令，拼 Prompt 时明确标注；入库前过滤明显密钥 / 身份证 / 银行卡，用户可关闭、编辑、删除、清空。
 
-29. **Agent 工具默认只读且走白名单**：模型只能调用 `ToolRegistry` 注册的工具；参数过 JSON Schema，执行有 20 秒超时，工具以 `CurrentUser` 身份运行。当前不提供写工具；二期写工具必须有二次确认、幂等键和审计。工具结果回灌前截断，完整结果只落 `agent_tool_call`。
+29. **Agent 工具默认只读且走白名单**：模型只能调用 `ToolRegistry` 注册的工具；参数过 JSON Schema，执行有 20 秒超时，工具以 `CurrentUser` 身份运行。当前 6 个工具全部只读；二期写工具必须有二次确认、幂等键和审计。工具结果回灌前截断，完整结果只落 `agent_tool_call`。历史检索是唯一会读「全站消息表」的工具，所以 owner 条件必须写在 SQL 里，不能靠调用方传对 id。
 
 ## 十、开发指南
 
@@ -1469,8 +1505,8 @@ npm run preview      # 本地预览 dist/
 10. **记忆 MVP 不做向量检索**：单用户最多 100 条短事实，按「最近更新 + 手动优先」取 20 条注入即可。等记忆量或用户数上来再加 embedding，不要为 MVP 引入向量库。
 11. **摘要只在单实例内去重**：`ConversationSummaryService` 用进程内 `Set<Long>` 防同一会话并发摘要；多实例部署会出现两个节点同时摘要同一会话，届时必须改成数据库行锁 / 状态位。当前项目本身还没有多实例部署。
 
-12. **Agent 当前只有 3 个只读工具**：`search_blog` / `get_blog_post` / `calculator`；没有写工具、审批、并行工具、MCP、多智能体。写博客草稿等动作是二期。
-13. **工具时间线刷新后不重放**：`agent_tool_call` 已落库，但 MVP 没有“按会话读取工具日志”的 REST 接口；刷新页面只保留最终回答，实时时间线只在当轮流式期间可见。
+12. **Agent 当前有 6 个只读工具**：`search_blog` / `get_blog_post` / `calculator` / `search_my_history` / `read_conversation` / `list_my_conversations`；没有写工具、审批、并行工具、MCP、多智能体。写博客草稿等动作是二期。历史检索依赖 MySQL ngram 全文索引；索引建不出来时自动回退 LIKE，但会退化成全表子串扫描。
+13. **工具时间线刷新后折叠回放**：`agent_tool_call.message_id` 在助手消息入库后回填；`GET /messages` 返回精简 `toolCalls`（只含工具 / 参数 / 状态 / 摘要 / 耗时，**不含 `result_json`**），前端映射回 `agentSteps` 并默认折叠成「查询过程（N 步）· 引用（M 条）」。流式期间默认展开，但用户可以随时点摘要折叠；引用卡与步骤在同一个 `<details>` 里（2026-11-06 第九次变更）。
 14. **每轮多一次 planner 调用**：工具闭环每轮先调一次非流式 planner，再调最终流式回答；简单聊天也会多一次小请求。`agent.enabled=false` 可完全退回旧行为。
 
 ### 13.2 容易踩的坑
@@ -1531,7 +1567,7 @@ npm run preview      # 本地预览 dist/
 50. **tool 结果回灌必须带 `tool_call_id`**：assistant 的 tool_calls 与 role=tool 消息靠 id 对应；漏了 id 或改 id，模型会把工具结果当成普通用户文本。
 51. **planner 可能无视工具**：即使工具定义里有 `get_blog_post`，模型也可能凭历史摘要回答。System Prompt 已明确“读取站内文章必须调用工具，不能编造”；调工具描述时优先写“什么时候必须用”，不要只写“能做什么”。
 
-### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条，2026-09-25 追加第 6、7 条，2026-10-08 追加第 8 条，2026-11-06 追加第 9、10 条）
+### 13.3 文档偏差记录（2026-09-21 已全部修正，2026-09-24 追加第 5 条，2026-09-25 追加第 6、7 条，2026-10-08 追加第 8 条，2026-11-06 追加第 9–13 条）
 
 首次全量通读时发现三份 README 有 4 处与代码不符，现已按实际情况改写。**这张表留着是为了说明「为什么这几处的措辞是现在这样」**，不要把它们又改回原来的说法。
 
@@ -1549,6 +1585,10 @@ npm run preview      # 本地预览 dist/
 | 9 | 本文 2.2 `CurrentUser.java`、6.2 初始化说明 | `CurrentUser` 只有 3 个字段；`init.sql` 建 3 张表、种子管理员 role=1 | 实际 `CurrentUser` 是 `(id, username, role, systemPrompt)`；`init.sql` 建 5 张表，种子是 role=2 超级管理员。2026-11-06 加博客模块时顺手修正 |
 | 11 | 本文 5.1 LLM 默认模型 / 白名单行 | 仍写着 `qwen3.6-flash,qwen3.7-flash,...`，与 `application.properties` 的 `deepseek-v4.1-flash` / `qwen3.8-flash,qwen3.8-max,deepseek-v4.1-flash` 不一致 | 改为实际默认值。2026-11-06 加记忆功能顺手修正 |
 | 10 | `chatbot/README.md` 配置表 | `llm.available-models` 默认值还是 `qwen3.6-flash,qwen3.7-flash,qwen3.8-flash,qwen3.8-max` | 实际默认是 `qwen3.8-flash,qwen3.8-max,deepseek-v4.1-flash`（与 `application.properties` 一致）。2026-11-06 加博客时顺手修正 |
+| 12 | `chatbot/README.md`「SSE 事件契约」表 | 只列了 `reasoning` / `delta` / `done` / `error`，漏了代码与本文 7.3 早已有的 `agent_status` / `tool_call` / `tool_result` | 本次补上三行，并写明 `tool_result.ui` 只给前端渲染、不落库、不回灌模型、为空时整个字段省略 |
+
+| 13 | 本文〇「数据库」行、6.2 初始化步骤 | 写「共 7 张表」「建 7 张表」，漏了 `admin_audit_log` | 实际 `init.sql` 有 8 张（加 `message_citation` 后 9 张）；本次补齐清单与计数 |
+
 > 顺带在根 `README.md` 的 Documentation Map 里补了一节 **For AI agents**，指向 `AGENTS.md`，并说明它被 gitignore、新克隆的仓库里看不到时应直接以本文为准。
 
 ---
@@ -1596,4 +1636,7 @@ npm run preview      # 本地预览 dist/
 | 2026-11-06（第四次） | **清理界面说明文案**：删除各弹窗与表单里重复或意义不大的占位提示、说明段和长 tooltip（登录、新建用户、重置密码、批量重置、修改密码、系统提示词、AI 记忆、个人信息、博客、聊天输入区等），只保留少量关键警示（一次性密码、登录态失效、删除不可恢复）。`ProfileView.vue` 去掉「登录名不可修改……」「统计的是你自己名下的数据……」等说明；`ChatView.vue` 去掉空状态副标题、输入框长占位和模型免责声明。纯文案调整，无接口、数据结构或交互变化。验证：`npm run type-check`、`npm run build` 通过。 |
 | 2026-11-06（第五次） | **聊天页删除会话改用网页内确认框**。`ChatView.vue` 不再调用 `window.confirm`，改为复用 `components/common/ConfirmDialog.vue`：点删除先记录目标会话，确认框里显示会话标题，确认期间按钮 busy，删除成功或失败后关闭；失败仍走顶部 `fatalError` 横幅。验证：`npm run type-check`、`npm run build` 通过。 |
 | 2026-11-06（第六次） | **新增 Agent 工具调用闭环（MVP：只读工具）**。LLM 层新增 `LlmTool` / `LlmToolCall` / `LlmTurn`，`LlmMessage` 支持 `tool_calls` / `tool_call_id`，`LlmClient` 增加非流式 `completeChat`；新增 3 个工具 `search_blog` / `get_blog_post` / `calculator`、`ToolRegistry`、`AgentService`；SSE 增加 `agent_status` / `tool_call` / `tool_result`；新表 `agent_tool_call` + 工具调用审计；前端新增 `AgentTimeline.vue` 和 ChatView 工具步骤状态。真实调用验证：站内搜索命中、读取文章正文、计算 128×37=4736。验证：Java 26 编译、后端启动、真实工具调用、`mvnw test`、`npm run type-check` / `npm run build` 通过。 |
+| 2026-11-06（第七次） | **新增跨会话历史检索（第二大脑）+ 引用卡深链**。后端新增 `HistorySearchService`（ngram 全文检索 + 相关性过滤 + LIKE 兜底）、3 个只读工具 `search_my_history` / `read_conversation` / `list_my_conversations`、`MessageSearchIndexInitializer`（启动时幂等补建 `ft_message_content`）；`ToolResult` 增加 `ui`（只给前端渲染、不落库），`tool_result` SSE 事件可带 `ui.citations`。前端 `AgentTimeline` 渲染可点击引用卡，`ChatView` 支持 `/chat?c=&m=` 深链定位 + 高亮 + 「回到最新」。验证：Java 26 编译、`mvnw test`（18 个测试全部通过，含 `HistoryTextTest` / `HistorySearchServiceTest` / `SearchMyHistoryToolTest`）、真实 LLM 跨会话找回「赤霄-7 / 18473」、`list_my_conversations` + `read_conversation` 串联调用、`npm run type-check` / `npm run build` 通过。 |
+| 2026-11-06（第八次） | **引用卡持久化（修复刷新 / 切会话后消失）**。新表 `message_citation` + `MessageCitation` / `MessageCitationRepository` / `MessageCitationVO` / `MessageCitationStore`；`ToolResult` 增加 typed `citations`（`ToolCitation`），`AgentService.PreparedTurn` 把引用带出 planner，`ChatService` 在助手消息入库后（含中断 / 失败的部分回复）落库；`GET messages` 批量回填 `MessageVO.citations`；前端抽出 `CitationList.vue`，`toUiMessage` 带上 citations，`MessageBubble` 在时间线不重放时继续渲染。顺手修正引用角色大小写（工具 ui 里是 `ASSISTANT`，前端按 `assistant` 判断）。验证：`mvnw test` 20 个测试全过（新增 `MessageCitationStoreTest`）；真实 LLM 回答后 `GET messages` 返回 5 条 citations 与可点击 url；`npm run type-check` / `npm run build` 通过。 |
+| 2026-11-06（第九次） | **查询时间线折叠回放**。`agent_tool_call` 新增 `message_id`（索引）与 `tool_label`；`AgentToolCallStore.attachToMessage()` 在助手消息入库后按本轮 callId 回填（成功 / 中断 / 失败三条路径都挂）；`MessageToolCallVO` + `MessageVO.toolCalls` 随 `GET messages` 返回精简步骤（不含 `result_json`）；前端 `toUiMessage` 映射成 `agentSteps` 并标 `agentReplay`，`AgentTimeline` 统一用 `<details>`：流式默认展开、可手动折叠，刷新后默认折叠成「查询过程（N 步）· 引用（M 条）」；`AgentStepList` 抽出共用步骤列表；引用卡并回同一个折叠块，不再单独常驻。验证：`mvnw test` 21 个测试全过（新增 `MessageToolCallReplayTest`）；真实 LLM 回答后 `GET messages` 返回 2 步 toolCalls（含参数 / 状态 / 耗时）与 5 条 citations；`npm run type-check` / `npm run build` 通过。 |
 *最后更新：2026-11-06*

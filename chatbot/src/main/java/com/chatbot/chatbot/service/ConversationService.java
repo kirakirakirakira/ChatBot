@@ -3,15 +3,20 @@ package com.chatbot.chatbot.service;
 import com.chatbot.chatbot.auth.CurrentUser;
 import com.chatbot.chatbot.dto.AttachmentVO;
 import com.chatbot.chatbot.dto.ConversationVO;
+import com.chatbot.chatbot.dto.MessageCitationVO;
+import com.chatbot.chatbot.dto.MessageToolCallVO;
 import com.chatbot.chatbot.dto.MessagePageVO;
 import com.chatbot.chatbot.dto.RenameConversationRequest;
 import com.chatbot.chatbot.dto.MessageVO;
+import com.chatbot.chatbot.entity.AgentToolCall;
 import com.chatbot.chatbot.entity.Conversation;
 import com.chatbot.chatbot.entity.Message;
+import com.chatbot.chatbot.entity.MessageCitation;
 import com.chatbot.chatbot.entity.Role;
 import com.chatbot.chatbot.repository.AgentToolCallRepository;
 import com.chatbot.chatbot.repository.AttachmentRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
+import com.chatbot.chatbot.repository.MessageCitationRepository;
 import com.chatbot.chatbot.repository.MessageRepository;
 import com.chatbot.chatbot.repository.UserRepository;
 import org.springframework.data.domain.PageRequest;
@@ -21,6 +26,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -55,17 +61,23 @@ public class ConversationService {
      */
     private final AttachmentRepository attachmentRepository;
     private final AgentToolCallRepository agentToolCallRepository;
+    private final MessageCitationRepository messageCitationRepository;
+    private final ObjectMapper objectMapper;
 
     public ConversationService(ConversationRepository conversationRepository,
                                MessageRepository messageRepository,
                                UserRepository userRepository,
                                AttachmentRepository attachmentRepository,
-                               AgentToolCallRepository agentToolCallRepository) {
+                               AgentToolCallRepository agentToolCallRepository,
+                               MessageCitationRepository messageCitationRepository,
+                               ObjectMapper objectMapper) {
         this.conversationRepository = conversationRepository;
         this.messageRepository = messageRepository;
         this.userRepository = userRepository;
         this.attachmentRepository = attachmentRepository;
         this.agentToolCallRepository = agentToolCallRepository;
+        this.messageCitationRepository = messageCitationRepository;
+        this.objectMapper = objectMapper;
     }
 
     /**
@@ -107,10 +119,15 @@ public class ConversationService {
 
         // 附件元信息一次查完再分组：逐条消息查就是 N+1，一页 50 条要跑 50 次 SQL
         Map<Long, List<AttachmentVO>> attachments = attachmentsOf(window);
+        // 引用同理：一页消息一次查完，刷新 / 切会话后引用卡仍然在
+        Map<Long, List<MessageCitationVO>> citations = citationsOf(window);
+        // 工具时间线同理：只回放已挂到消息上的调用，刷新后折叠展示
+        Map<Long, List<MessageToolCallVO>> toolCalls = toolCallsOf(window);
 
         // 查出来是 id 倒序（最新在前），反转成时间正序再交给前端，前端不用再自己倒一遍
         List<MessageVO> items = new ArrayList<>(window.stream()
-                .map(m -> MessageVO.from(m, attachments.get(m.getId())))
+                .map(m -> MessageVO.from(m, attachments.get(m.getId()), citations.get(m.getId()),
+                        toolCalls.get(m.getId())))
                 .toList());
         Collections.reverse(items);
 
@@ -138,12 +155,41 @@ public class ConversationService {
     @Transactional
     public void delete(Long id, CurrentUser user) {
         Conversation conversation = requireOwned(id, user);
-        // 工具日志没有外键，先清掉，避免会话删了留下一堆孤儿审计行
+        // 工具日志 / 引用都没有外键，先清掉，避免会话删了留下一堆孤儿行
         agentToolCallRepository.deleteByConversationId(conversation.getId());
+        messageCitationRepository.deleteByConversationId(conversation.getId());
         // 附件也要一起删，而且必须排在会话之前：fk_attachment_conversation 是 RESTRICT，留着会直接报约束冲突
         attachmentRepository.deleteByConversationId(conversation.getId());
         messageRepository.deleteByConversationId(conversation.getId());
         conversationRepository.delete(conversation);
+    }
+
+    /** 一批消息的工具时间线，key = message id。旧数据没有 message_id，自然不会出现在这里。 */
+    private Map<Long, List<MessageToolCallVO>> toolCallsOf(List<Message> messages) {
+        List<Long> ids = messages.stream().map(Message::getId).toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<MessageToolCallVO>> grouped = new LinkedHashMap<>();
+        for (AgentToolCall row : agentToolCallRepository.findByMessageIdInOrderByIdAsc(ids)) {
+            grouped.computeIfAbsent(row.getMessageId(), k -> new ArrayList<>())
+                    .add(MessageToolCallVO.from(row, objectMapper));
+        }
+        return grouped;
+    }
+
+    /** 一批消息的引用卡，key = message id。空页直接返回，别为 0 条消息跑一条 IN 查询。 */
+    private Map<Long, List<MessageCitationVO>> citationsOf(List<Message> messages) {
+        List<Long> ids = messages.stream().map(Message::getId).toList();
+        if (ids.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, List<MessageCitationVO>> grouped = new LinkedHashMap<>();
+        for (MessageCitation citation : messageCitationRepository.findByMessageIdInOrderByIdAsc(ids)) {
+            grouped.computeIfAbsent(citation.getMessageId(), k -> new ArrayList<>())
+                    .add(MessageCitationVO.from(citation));
+        }
+        return grouped;
     }
 
     /**

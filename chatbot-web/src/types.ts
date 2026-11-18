@@ -32,6 +32,17 @@ export interface AttachmentRef {
   url?: string
 }
 
+/** 刷新后回放的一步工具调用（后端 MessageToolCallVO）。字段对齐 SSE 的 tool_call / tool_result。 */
+export interface MessageToolCall {
+  callId: string
+  tool: string
+  label: string
+  args: Record<string, unknown>
+  status: 'OK' | 'ERROR'
+  summary: string | null
+  durationMs: number | null
+}
+
 /** 后端返回的单条历史消息。 */
 export interface Message {
   id: number
@@ -49,6 +60,10 @@ export interface Message {
   reasoningTokens?: number
   /** 这条消息带的图片（只有用户消息会有）；没图时后端不下发该字段。 */
   attachments?: Attachment[]
+  /** 这条回答展示过的引用卡；没有时后端不下发该字段。 */
+  citations?: Citation[]
+  /** 这条回答用过的工具步骤；刷新后用于折叠回放「查询过程」。 */
+  toolCalls?: MessageToolCall[]
   createdAt: string
 }
 
@@ -91,6 +106,34 @@ export interface ChatStreamEvent {
   status?: 'OK' | 'ERROR'
   summary?: string
   durationMs?: number
+  /** 工具自带的小体积展示数据（如历史检索的 citations）；不是所有工具都有。 */
+  ui?: AgentUi
+}
+
+/**
+ * 一张历史检索引用卡。messageId 为 null 表示只有会话级命中（标题 / 摘要命中），
+ * 点进去只能打开会话；有 messageId 时深链会定位到那条消息。
+ */
+export interface Citation {
+  /** 流式期间由工具提供，用于 v-for；刷新后从消息接口读回时没有，前端自己拼 key。 */
+  key?: string
+  /** 被引用的消息 id；null = 只有会话级命中。 */
+  messageId: number | null
+  conversationId: number
+  conversationTitle: string
+  role: 'user' | 'assistant' | null
+  snippet: string | null
+  createdAt: string | null
+  /** 站内深链，形如 /chat?c=12&m=34。 */
+  url: string
+}
+
+/** 兼容旧命名：AgentTimeline 之前用的是 AgentCitation。 */
+export type AgentCitation = Citation
+
+/** 工具结果的展示层数据。后端只放卡片必需字段，正文不会重复塞进来。 */
+export interface AgentUi {
+  citations?: Citation[]
 }
 
 /** 一条工具调用的界面状态；只存在于本轮生成期间，刷新历史后不重放。 */
@@ -102,6 +145,8 @@ export interface AgentStep {
   status: 'running' | 'ok' | 'error'
   summary?: string
   durationMs?: number
+  /** 工具返回的可渲染卡片数据；刷新历史后不重放（与 agentSteps 同生命周期）。 */
+  ui?: AgentUi
 }
 
 /** 界面渲染用消息：比后端 Message 多了流式生成期间的临时状态。 */
@@ -123,8 +168,12 @@ export interface UiMessage {
   reasoningTokens?: number
   /** 这条消息带的图片；发送时先用本地预览地址，历史加载时只有 id、由缩略图组件去取字节。 */
   attachments?: AttachmentRef[]
-  /** Agent 工具调用过程；只在流式期间展示，刷新后不再从数据库重放。 */
+  /** 刷新 / 切会话后从后端读回的引用卡；流式期间在 agentSteps[].ui.citations 里。 */
+  citations?: Citation[]
+  /** Agent 工具调用过程：流式期间来自 SSE，刷新后从 MessageVO.toolCalls 映射回来。 */
   agentSteps?: AgentStep[]
+  /** true = agentSteps 是从历史读回来的，渲染成默认折叠的「查询过程」。 */
+  agentReplay?: boolean
   /** Agent 正在分析 / 整理时的临时状态。 */
   agentStatus?: string
 }

@@ -41,7 +41,7 @@ class AgentToolCallStoreTest {
         conversationRepository.saveAndFlush(conversation);
 
         String callId = "call_" + UUID.randomUUID();
-        store.record(conversation.getId(), owner.getId(), callId, "calculator",
+        store.record(conversation.getId(), owner.getId(), callId, "calculator", "计算器",
                 "{\"expression\":\"1+1\"}", ToolResult.ok("1+1 = 2", Map.of("result", "2")), 3);
 
         long count = repository.findAll().stream()
@@ -51,5 +51,8 @@ class AgentToolCallStoreTest {
         assertEquals("OK", repository.findAll().stream()
                 .filter(row -> callId.equals(row.getCallId()))
                 .findFirst().orElseThrow().getStatus());
+        assertEquals("计算器", repository.findAll().stream()
+                .filter(row -> callId.equals(row.getCallId()))
+                .findFirst().orElseThrow().getToolLabel());
     }
 }

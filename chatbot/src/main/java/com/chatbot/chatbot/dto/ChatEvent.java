@@ -13,6 +13,8 @@ import java.util.Map;
  * {"type":"agent_status","content":"正在分析…"}
  * {"type":"tool_call","callId":"c1","tool":"search_blog","label":"搜索站内博客","args":{...}}
  * {"type":"tool_result","callId":"c1","status":"OK","summary":"找到 3 篇","durationMs":120}
+ * tool_result 可选带 ui（如历史检索的 citations）。ui 只给前端渲染卡片，不入库、不回灌模型；
+ * 体积必须小，工具里只放标题 / 片段 / 跳转参数，别把正文塞进来。
  * <p>
  * reasoning 是推理模型的思考增量，只给前端展示、不入库；前端不认得这个 type 时忽略即可。
  */
@@ -31,17 +33,18 @@ public record ChatEvent(
         Map<String, Object> args,
         String status,
         String summary,
-        Long durationMs) {
+        Long durationMs,
+        Map<String, Object> ui) {
 
     /** 思考过程增量，用于「思考中…」展示，不入库。 */
     public static ChatEvent reasoning(String content) {
         return new ChatEvent("reasoning", content, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     public static ChatEvent delta(String content) {
         return new ChatEvent("delta", content, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     /**
@@ -52,27 +55,33 @@ public record ChatEvent(
     public static ChatEvent done(com.chatbot.chatbot.entity.Message saved) {
         return new ChatEvent("done", null, saved.getId(), saved.getModel(),
                 saved.getPromptTokens(), saved.getCompletionTokens(), saved.getReasoningTokens(),
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     public static ChatEvent error(String message) {
         return new ChatEvent("error", message, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     /** Agent 正在分析 / 整理，给前端一个可见的等待状态。 */
     public static ChatEvent agentStatus(String content) {
         return new ChatEvent("agent_status", content, null, null, null, null, null,
-                null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     public static ChatEvent toolCall(String callId, String tool, String label, Map<String, Object> args) {
         return new ChatEvent("tool_call", null, null, null, null, null, null,
-                callId, tool, label, args, null, null, null);
+                callId, tool, label, args, null, null, null, null);
     }
 
     public static ChatEvent toolResult(String callId, String status, String summary, long durationMs) {
+        return toolResult(callId, status, summary, durationMs, null);
+    }
+
+    /** ui 可空：没卡片的工具沿用上面那个重载，SSE 里就少一个字段。 */
+    public static ChatEvent toolResult(String callId, String status, String summary, long durationMs,
+                                       Map<String, Object> ui) {
         return new ChatEvent("tool_result", null, null, null, null, null, null,
-                callId, null, null, null, status, summary, durationMs);
+                callId, null, null, null, status, summary, durationMs, ui);
     }
 }

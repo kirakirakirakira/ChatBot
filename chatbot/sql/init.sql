@@ -65,14 +65,16 @@ CREATE TABLE IF NOT EXISTS `user_memory` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Agent 工具调用日志（对应实体 AgentToolCall）。
--- 只做排查 / 审计 / 以后回放，不建外键：删会话或删用户由应用层显式清理，避免日志反过来挡住删除。
+-- 用来排查 / 审计，以及刷新后折叠回放「查询过程」；不建外键：删会话或删用户由应用层显式清理，避免日志反过来挡住删除。
 -- arguments_json / result_json 存原始 JSON；回灌给模型的版本会在 AgentService 里按 agent.max-result-chars 截断。
 CREATE TABLE IF NOT EXISTS `agent_tool_call` (
   `id`              bigint      NOT NULL AUTO_INCREMENT,
   `conversation_id` bigint      NOT NULL,
   `user_id`         bigint      NOT NULL,
   `call_id`         varchar(64) NOT NULL,
+  `message_id`      bigint      DEFAULT NULL,
   `tool_name`       varchar(64) NOT NULL,
+  `tool_label`      varchar(64) DEFAULT NULL,
   `arguments_json`  longtext    DEFAULT NULL,
   `result_summary`  text        DEFAULT NULL,
   `result_json`     longtext    DEFAULT NULL,
@@ -83,7 +85,8 @@ CREATE TABLE IF NOT EXISTS `agent_tool_call` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_agent_tool_call_id` (`call_id`),
   KEY `idx_agent_tool_call_conversation` (`conversation_id`, `id`),
-  KEY `idx_agent_tool_call_user` (`user_id`)
+  KEY `idx_agent_tool_call_user` (`user_id`),
+  KEY `idx_agent_tool_call_message` (`message_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 会话（对应左侧会话列表的一项）
@@ -124,9 +127,31 @@ CREATE TABLE IF NOT EXISTS `message` (
   `created_at`      datetime(6)              NOT NULL,
   PRIMARY KEY (`id`),
   KEY `FK6yskk3hxw5sklwgi25y6d5u1l` (`conversation_id`),
+  -- 跨会话历史检索用：ngram 是中文全文检索的前提，默认分词器对中文几乎无效。
+  -- 索引由 MessageSearchIndexInitializer 幂等补建（不跑 init.sql 的库也能用）；建不出来时服务自动回退 LIKE。
+  FULLTEXT KEY `ft_message_content` (`content`) WITH PARSER ngram,
   CONSTRAINT `FK6yskk3hxw5sklwgi25y6d5u1l` FOREIGN KEY (`conversation_id`) REFERENCES `conversation` (`id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 回答引用卡（历史检索命中）。message_id 指助手消息，cited_* 指被引用的历史消息。
+-- 刻意不建外键：删会话 / 删用户由应用层显式清理；漏删最多是孤儿行，不会像 RESTRICT 那样卡住删会话。
+-- url 不落库：读的时候按 cited_conversation_id / cited_message_id 现拼，路由变了不用迁移数据。
+CREATE TABLE IF NOT EXISTS `message_citation` (
+  `id`                   bigint       NOT NULL AUTO_INCREMENT,
+  `message_id`           bigint       NOT NULL,
+  `conversation_id`      bigint       NOT NULL,
+  `cited_message_id`     bigint       DEFAULT NULL,
+  `cited_conversation_id` bigint      NOT NULL,
+  `conversation_title`   varchar(120) NOT NULL,
+  `role`                 varchar(16)  DEFAULT NULL,
+  `snippet`              varchar(500) DEFAULT NULL,
+  `quoted_at`            datetime(6)  DEFAULT NULL,
+  `source`               varchar(32)  NOT NULL DEFAULT 'HISTORY',
+  `created_at`           datetime(6)  NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `idx_message_citation_message` (`message_id`),
+  KEY `idx_message_citation_conversation` (`conversation_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 -- 图片附件（多模态输入），对应实体 com.chatbot.chatbot.entity.Attachment。
 -- data 用 LONGBLOB 直接存字节：单机部署少一个「文件跑哪去了」的运维面，代价是库变大、备份变慢；
 --   图片限 5MB、每条消息限 4 张，量级可控。要多实例部署就把 data 换成对象存储的 key。
@@ -300,3 +325,18 @@ VALUES ('test_super', '$2a$10$5GosfNYckx.pqmr6U/JHauxCRq/mTJ51kO7EgXBA7Zhe.4CcBe
 -- ===== 已有库升级：2026-11-06「Agent 工具调用日志」 =====
 -- 全新表，直接执行上面的 CREATE TABLE IF NOT EXISTS；已有库启动时 ddl-auto=update 也会自动建表。
 -- 没有外键；删会话 / 删用户由 ConversationService / AdminUserService 显式清理。
+
+-- ===== 已有库升级：2026-11-06「跨会话历史检索」 =====
+-- 不需要改表结构，只补一个全文索引。启动时 MessageSearchIndexInitializer 会幂等检查并创建；
+-- 也可以手工执行下面这条（已存在会报 Duplicate key name，跳过即可）：
+--   ALTER TABLE `message` ADD FULLTEXT INDEX `ft_message_content` (`content`) WITH PARSER ngram;
+-- 建不出来（没装 ngram / 没 DDL 权限）不影响启动，检索会回退到 LIKE '%关键词%'。
+-- ===== 已有库升级：2026-11-06「回答引用卡」 =====
+-- 全新表，直接执行上面的 CREATE TABLE IF NOT EXISTS；已有库启动时 ddl-auto=update 也会自动建表。
+-- 历史回答不会补数据：只有本次改动之后产生的回答才带引用卡。
+-- ===== 已有库升级：2026-11-06「查询时间线回放」 =====
+-- 两个可空列 + 一个索引；旧日志保持 NULL（= 不回放），不需要清数据：
+--   ALTER TABLE `agent_tool_call`
+--     ADD COLUMN `message_id` bigint DEFAULT NULL AFTER `call_id`,
+--     ADD COLUMN `tool_label` varchar(64) DEFAULT NULL AFTER `tool_name`,
+--     ADD KEY `idx_agent_tool_call_message` (`message_id`);

@@ -1,14 +1,28 @@
 <script setup lang="ts">
-import type { UiMessage } from '@/types'
+import { computed } from 'vue'
+import type { Citation, UiMessage } from '@/types'
 import AttachmentThumb from '@/components/AttachmentThumb.vue'
 import AgentTimeline from '@/components/AgentTimeline.vue'
 import MarkdownContent from '@/components/MarkdownContent.vue'
 
-defineProps<{
+const props = defineProps<{
   message: UiMessage
   /** 是否显示「重新生成」：只有最后一条助手消息、且不在生成中时才给。 */
   canRegenerate?: boolean
+  /** 深链定位到这条消息时闪一下；只管视觉，不带任何业务状态。 */
+  highlight?: boolean
 }>()
+
+/**
+ * 引用卡有两个来源：流式期间在 agentSteps[].ui.citations，刷新 / 切会话后在 message.citations。
+ * 这里统一成一份，模板只渲染一次；否则折叠查询过程时会把引用卡一起藏起来。
+ */
+const citations = computed<Citation[]>(() => {
+  if (props.message.citations && props.message.citations.length > 0) {
+    return props.message.citations
+  }
+  return (props.message.agentSteps ?? []).flatMap((step) => step.ui?.citations ?? [])
+})
 
 const emit = defineEmits<{
   regenerate: []
@@ -16,7 +30,7 @@ const emit = defineEmits<{
 </script>
 
 <template>
-  <div class="row" :class="message.role">
+  <div class="row" :class="[message.role, { 'is-located': highlight }]" :data-message-id="message.id ?? undefined">
     <!-- 助手消息带头像、不用气泡底：长回答铺在背景上比塞进盒子里好读（ChatGPT / Claude 现行做法） -->
     <div v-if="message.role === 'assistant'" class="avatar" aria-hidden="true">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3" /><path d="M18.4 5.6 16.3 7.7" /><path d="M21 12h-3" /><path d="M5.6 7.7 7.7 5.6" /><path d="M3 12h3" /><path d="M12 21a9 9 0 0 0 9-9H3a9 9 0 0 0 9 9Z" /></svg>
@@ -28,11 +42,13 @@ const emit = defineEmits<{
         <AttachmentThumb v-for="(a, i) in message.attachments" :key="a.id ?? 'local-' + i" :attachment="a" />
       </div>
 
-      <!-- Agent 工具调用时间线：先于正文出现，让用户知道模型在搜什么 / 读什么 -->
+      <!-- 查询过程 + 引用卡：先于正文出现；刷新后整块折叠，点开仍能看到工具步骤和来源 -->
       <AgentTimeline
-        v-if="message.role === 'assistant' && ((message.agentSteps?.length ?? 0) > 0 || message.agentStatus)"
+        v-if="message.role === 'assistant' && ((message.agentSteps?.length ?? 0) > 0 || message.agentStatus || citations.length > 0)"
         :steps="message.agentSteps ?? []"
         :status="message.agentStatus"
+        :replay="message.agentReplay"
+        :citations="citations"
       />
 
       <!-- 思考过程：生成中默认展开，结束后收起，可手动再展开。
@@ -100,6 +116,21 @@ const emit = defineEmits<{
 
 .row.user {
   justify-content: flex-end;
+}
+
+/* 深链定位：整条消息的背景闪一下再淡出，滚动位置由 ChatView 负责 */
+@keyframes locate-flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+.row.is-located .body {
+  border-radius: 12px;
+  animation: locate-flash 2.6s ease-out;
 }
 
 .avatar {

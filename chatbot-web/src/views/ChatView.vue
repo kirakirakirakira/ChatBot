@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import AttachmentThumb from '@/components/AttachmentThumb.vue'
 import ConversationSidebar from '@/components/ConversationSidebar.vue'
 import MessageBubble from '@/components/MessageBubble.vue'
@@ -163,6 +163,15 @@ const activeIsEmpty = ref(false)
 let abortController: AbortController | null = null
 const scroller = ref<HTMLElement | null>(null)
 
+/**
+ * 深链定位状态：locatedMessageId 非 null = 当前停在某条历史消息上（不是最新一页），
+ * 顶部显示「回到最新」；highlightMessageId 只负责 2.6 秒的高亮闪烁。
+ * 两者分开：用户点「回到最新」后定位状态要立刻清掉，高亮则可以自然衰减。
+ */
+const locatedMessageId = ref<number | null>(null)
+const highlightMessageId = ref<number | null>(null)
+let highlightTimer: number | undefined
+
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
 }
@@ -177,6 +186,7 @@ function scrollToBottom(): void {
 }
 
 const router = useRouter()
+const route = useRoute()
 
 /** 头像菜单的「个人信息」：跳到平级模块 /profile（资料 / 人设 / 改密码 / 退出所有设备都在那一页）。 */
 function goProfile(): void {
@@ -380,8 +390,8 @@ async function loadConversations(): Promise<void> {
   }
 }
 
-async function selectConversation(id: number): Promise<void> {
-  if (id === activeId.value) {
+async function selectConversation(id: number, force = false): Promise<void> {
+  if (id === activeId.value && !force) {
     return
   }
   stopStreaming()
@@ -417,6 +427,76 @@ async function selectConversation(id: number): Promise<void> {
   }
 }
 
+
+/**
+ * 打开站内深链 /chat?c=12&m=34（历史检索引用卡、会话级命中都走这里）。
+ * m 省略时只切会话；指定 m 且不在最新一页时，再按 id 游标往前取一页，
+ * 让那条消息落进当前窗口——不额外加「按消息 id 查整段」的接口，复用现有分页契约。
+ */
+async function openDeepLink(cid: number, mid: number | null): Promise<void> {
+  await selectConversation(cid)
+  if (activeId.value !== cid || mid === null) {
+    return
+  }
+  if (!messages.value.some((m) => m.id === mid)) {
+    loadingMessages.value = true
+    try {
+      const page = await getMessages(cid, { before: mid + 1, limit: PAGE_SIZE })
+      // 等待期间用户可能已经切走，这一页属于旧会话，丢掉
+      if (activeId.value !== cid) {
+        return
+      }
+      if (!page.items.some((m) => m.id === mid)) {
+        fatalError.value = '这条历史消息已经不存在了'
+        return
+      }
+      messages.value = page.items.map(toUiMessage)
+      hasMoreOlder.value = page.hasMore
+      olderCursor.value = page.beforeId
+      activeIsEmpty.value = false
+      fatalError.value = ''
+    } catch (e) {
+      fatalError.value = errMsg(e)
+      return
+    } finally {
+      loadingMessages.value = false
+    }
+  }
+  locatedMessageId.value = mid
+  await nextTick()
+  flashMessage(mid)
+}
+
+/** 滚到目标消息并闪一下。用 querySelector 而不是给每条消息存 ref：消息列表是 v-for，ref 数组会随分页变动。 */
+function flashMessage(id: number): void {
+  highlightMessageId.value = id
+  const target = scroller.value?.querySelector<HTMLElement>(`[data-message-id="${id}"]`)
+  if (target) {
+    target.scrollIntoView({ block: 'center' })
+  }
+  if (highlightTimer !== undefined) {
+    window.clearTimeout(highlightTimer)
+  }
+  highlightTimer = window.setTimeout(() => {
+    highlightMessageId.value = null
+    highlightTimer = undefined
+  }, 2600)
+}
+
+/** 从历史定位回到最新一页，并把 URL 上的 c/m 清掉，避免刷新后又跳回旧消息。 */
+async function backToLatest(): Promise<void> {
+  const id = activeId.value
+  locatedMessageId.value = null
+  highlightMessageId.value = null
+  if (id === null) {
+    return
+  }
+  await selectConversation(id, true)
+  if (route.query.c !== undefined || route.query.m !== undefined) {
+    void router.replace({ path: '/chat' })
+  }
+}
+
 /** 后端消息 → 界面消息。附件只带元信息（id / 文件名），字节由 AttachmentThumb 按需去取。 */
 function toUiMessage(m: MessagePageItem): UiMessage {
   return {
@@ -429,6 +509,17 @@ function toUiMessage(m: MessagePageItem): UiMessage {
     completionTokens: m.completionTokens,
     reasoningTokens: m.reasoningTokens,
     attachments: m.attachments?.map((a) => ({ id: a.id, mime: a.mime, fileName: a.fileName, size: a.size })),
+    citations: m.citations,
+    agentSteps: m.toolCalls?.map((t) => ({
+      callId: t.callId,
+      tool: t.tool,
+      label: t.label,
+      args: t.args ?? {},
+      status: t.status === 'OK' ? 'ok' : 'error',
+      summary: t.summary ?? undefined,
+      durationMs: t.durationMs ?? undefined,
+    })),
+    agentReplay: (m.toolCalls?.length ?? 0) > 0 ? true : undefined,
   }
 }
 
@@ -709,6 +800,7 @@ function streamHandlers(reply: UiMessage): StreamHandlers {
             status: event.status === 'OK' ? 'ok' : 'error',
             summary: event.summary,
             durationMs: event.durationMs,
+            ui: event.ui,
           }
         : step)
       scrollToBottom()
@@ -765,6 +857,13 @@ function onKeydown(e: KeyboardEvent): void {
 onMounted(async () => {
   void loadLlmOptions()
   await loadConversations()
+  // 深链优先：从历史检索的引用卡进来时，不要先闪一下最新会话再跳走
+  const linkedId = Number(route.query.c)
+  if (Number.isFinite(linkedId) && linkedId > 0) {
+    const linkedMessage = Number(route.query.m)
+    await openDeepLink(linkedId, Number.isFinite(linkedMessage) && linkedMessage > 0 ? linkedMessage : null)
+    return
+  }
   const first = conversations.value[0]
   if (first) {
     await selectConversation(first.id)
@@ -774,12 +873,31 @@ onMounted(async () => {
 })
 
 /**
+ * 同一个 ChatView 内再次点引用卡时组件不会重新挂载，只能靠 query 变化触发。
+ * backToLatest 清空 query 时这里会拿到 undefined，直接忽略即可。
+ */
+watch(
+  () => [route.query.c, route.query.m] as const,
+  ([c, m]) => {
+    const cid = Number(c)
+    if (!Number.isFinite(cid) || cid <= 0) {
+      return
+    }
+    const mid = Number(m)
+    void openDeepLink(cid, Number.isFinite(mid) && mid > 0 ? mid : null)
+  },
+)
+
+/**
  * 组件卸载（退出登录、或 token 失效被弹回登录页）时必须掐断还在跑的 SSE：
  * 否则 fetch 会继续往一个已经不存在的界面上写增量，还白烧模型的 token。
  */
 onBeforeUnmount(() => {
   stopStreaming()
   clearPending()
+  if (highlightTimer !== undefined) {
+    window.clearTimeout(highlightTimer)
+  }
 })
 </script>
 
@@ -813,6 +931,10 @@ onBeforeUnmount(() => {
       <div v-if="fatalError" class="fatal-error">{{ fatalError }}</div>
 
       <div ref="scroller" class="messages">
+        <div v-if="locatedMessageId !== null" class="locate-bar">
+          <span>已定位到历史消息</span>
+          <button type="button" @click="backToLatest">回到最新</button>
+        </div>
         <div class="thread">
           <div v-if="loadingMessages" class="hint">消息加载中…</div>
 
@@ -844,6 +966,7 @@ onBeforeUnmount(() => {
               v-for="(m, i) in messages"
               :key="m.id ?? 'pending-' + i"
               :message="m"
+              :highlight="m.id !== null && m.id === highlightMessageId"
               :can-regenerate="m.role === 'assistant' && i === messages.length - 1 && !streaming"
               @regenerate="regenerate"
             />
@@ -1034,6 +1157,40 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-y: auto;
   padding: 8px 24px 24px;
+}
+
+/* 深链定位提示条：贴在滚动区顶部，不随消息滚走 */
+.locate-bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: 760px;
+  margin: 0 auto 8px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--text-muted);
+  font-size: 12px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 8%);
+}
+
+.locate-bar button {
+  padding: 3px 9px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.locate-bar button:hover {
+  filter: brightness(1.06);
 }
 
 /* 内容列居中限宽：超宽屏上整行铺满的文字读起来非常累 */

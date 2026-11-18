@@ -1,6 +1,6 @@
 # Chatbot
 
-类 ChatGPT 的全栈 AI 聊天应用：Spring Boot 后端 + Vue 3 前端，支持多用户登录、多会话管理、SSE 流式对话、AI 长期记忆、只读工具调用（站内博客搜索 / 文章读取 / 计算器）与多人博客。
+类 ChatGPT 的全栈 AI 聊天应用：Spring Boot 后端 + Vue 3 前端，支持多用户登录、多会话管理、SSE 流式对话、AI 长期记忆、只读工具调用（站内博客搜索 / 文章读取 / 计算器 / 跨会话历史检索）与多人博客。
 模型走阿里云百炼 DashScope（OpenAI 兼容接口），也可直连任何 OpenAI 兼容服务；未配 API Key 时自动降级为本地 Mock。
 
 > 架构 / 逐文件清单 / 数据库 / API 全表 / 核心流程 / 安全设计 / 已知限制见 [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)；

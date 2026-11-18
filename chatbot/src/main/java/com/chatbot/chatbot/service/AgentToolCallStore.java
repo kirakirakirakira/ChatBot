@@ -9,6 +9,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.List;
+
 /** 工具调用审计的短事务写入；失败只记日志，不能影响正在进行的聊天。 */
 @Service
 public class AgentToolCallStore {
@@ -24,13 +26,14 @@ public class AgentToolCallStore {
     }
 
     @Transactional
-    public void record(Long conversationId, Long userId, String callId, String toolName,
+    public void record(Long conversationId, Long userId, String callId, String toolName, String toolLabel,
                        String argumentsJson, ToolResult result, long durationMs) {
         AgentToolCall row = new AgentToolCall();
         row.setConversationId(conversationId);
         row.setUserId(userId);
         row.setCallId(callId);
         row.setToolName(toolName);
+        row.setToolLabel(toolLabel);
         row.setArgumentsJson(argumentsJson);
         row.setResultSummary(result == null ? null : result.summary());
         row.setStatus(result == null ? "ERROR" : result.status());
@@ -44,5 +47,17 @@ public class AgentToolCallStore {
             }
         }
         repository.save(row);
+    }
+
+    /**
+     * 助手消息入库后回填 message_id。独立短事务：调用方（ChatService）不包事务，
+     * 失败只记日志，不能让「时间线回放」反过来影响已经完成的回答。
+     */
+    @Transactional
+    public int attachToMessage(Long conversationId, Long userId, List<String> callIds, Long messageId) {
+        if (callIds == null || callIds.isEmpty() || messageId == null) {
+            return 0;
+        }
+        return repository.attachToMessage(conversationId, userId, callIds, messageId);
     }
 }

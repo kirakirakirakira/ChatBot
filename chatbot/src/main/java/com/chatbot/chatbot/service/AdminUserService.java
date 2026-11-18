@@ -16,6 +16,7 @@ import com.chatbot.chatbot.entity.User;
 import com.chatbot.chatbot.repository.AgentToolCallRepository;
 import com.chatbot.chatbot.repository.AttachmentRepository;
 import com.chatbot.chatbot.repository.BlogPostRepository;
+import com.chatbot.chatbot.repository.MessageCitationRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
 import com.chatbot.chatbot.repository.MessageRepository;
 import com.chatbot.chatbot.repository.UserMemoryRepository;
@@ -77,6 +78,7 @@ public class AdminUserService {
     private final BlogPostRepository blogPostRepository;
     private final UserMemoryRepository userMemoryRepository;
     private final AgentToolCallRepository agentToolCallRepository;
+    private final MessageCitationRepository messageCitationRepository;
     private final PasswordEncoder passwordEncoder;
     private final AdminAuditService adminAuditService;
 
@@ -87,6 +89,7 @@ public class AdminUserService {
                             BlogPostRepository blogPostRepository,
                             UserMemoryRepository userMemoryRepository,
                             AgentToolCallRepository agentToolCallRepository,
+                            MessageCitationRepository messageCitationRepository,
                             PasswordEncoder passwordEncoder,
                             AdminAuditService adminAuditService) {
         this.userRepository = userRepository;
@@ -96,6 +99,7 @@ public class AdminUserService {
         this.blogPostRepository = blogPostRepository;
         this.userMemoryRepository = userMemoryRepository;
         this.agentToolCallRepository = agentToolCallRepository;
+        this.messageCitationRepository = messageCitationRepository;
         this.passwordEncoder = passwordEncoder;
         this.adminAuditService = adminAuditService;
     }
@@ -264,6 +268,7 @@ public class AdminUserService {
         userMemoryRepository.deleteByUserId(id);
         // 工具日志没有外键，按 user_id 一并清掉
         agentToolCallRepository.deleteByUserId(id);
+        messageCitationRepository.deleteByOwnerId(id);
         attachmentRepository.deleteByOwnerId(id);
         messageRepository.deleteByOwnerId(id);
         conversationRepository.deleteByOwnerId(id);

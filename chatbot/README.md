@@ -1,4 +1,4 @@
-# chatbot 后端
+p# chatbot 后端
 
 类 ChatGPT 网页版的 Spring Boot 后端：会话管理 + 消息存储 + SSE 流式对话 + Agent 只读工具调用 + AI 长期记忆 / 会话摘要 + 博客文章 + 自签 token 鉴权。
 LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
@@ -22,7 +22,7 @@ LLM 走百炼（OpenAI 兼容接口），未配 key 时自动用本地 Mock。
 - **管理端写操作有审计**：六个写操作成功后各写一行 `admin_audit_log`，与业务同事务（回滚则不留痕）；读取走 `GET /api/admin/audit`。审计表不建外键、不开删除入口。
 - **角色是层级模型**：超管 > 管理员 > 普通用户 > 访客，管理操作只能「上对下」，谁都不能改自己的角色。细节见 PROJECT_OVERVIEW.md 8.6。
 - **「管自己」的接口有五个**：改密码、改人设、改资料、使用统计、退出所有设备。另有 AI 记忆六个接口（五个记忆 CRUD + 一个总开关），全部固定 `/api/users/me/memories` / `/api/users/me/memory-settings`，不接受 userId 参数。
-- **Agent 工具调用**：当前 3 个只读工具 `search_blog` / `get_blog_post` / `calculator`。planner 非流式决定是否调用，工具由后端白名单执行，最终回答仍走 SSE 流式；不会自动改数据。登录名与角色不可自改（username 是审计锚点，role / status 是管理端写口径）；改资料不换 token，改密码 / revoke 会作废旧登录态。
+- **Agent 工具调用**：当前 6 个只读工具 `search_blog` / `get_blog_post` / `calculator` / `search_my_history` / `read_conversation` / `list_my_conversations`。planner 非流式决定是否调用，工具由后端白名单执行，最终回答仍走 SSE 流式；不会自动改数据。历史检索的 SQL 一律带 `owner_id`，只搜当前用户；引用卡深链是 `/chat?c=&m=`，并会落到 `message_citation`，刷新 / 切会话后随 `GET /messages` 的 `MessageVO.citations` 返回（SSE 的 `tool_result.ui` 只服务于当轮流式）。工具步骤在助手消息入库后回填 `agent_tool_call.message_id`，刷新后随 `MessageVO.toolCalls` 返回精简步骤，前端折叠成「查询过程」。登录名与角色不可自改（username 是审计锚点，role / status 是管理端写口径）；改资料不换 token，改密码 / revoke 会作废旧登录态。
 - **带图请求打到不支持图片的模型会 400**（`llm.vision-models` 白名单），错误文案列出可用模型；校验刻意放在用户消息落库之前。
 
 会话标题：发出第一条消息时，自动用该消息前 30 字替换「新的对话」。
@@ -37,6 +37,9 @@ JSON，null 字段不输出：
 | delta | `{"type":"delta","content":"..."}` | 正式回答的增量文本 |
 | done | `{"type":"done","messageId":123,"model":"...","prompt_tokens":4,"completion_tokens":30,"reasoning_tokens":12}` | 生成结束，助手消息已入库，并带回 model 与用量 |
 | error | `{"type":"error","content":"..."}` | 出错。**文案在 `content`，不是 `message`** |
+| agent_status | `{"type":"agent_status","content":"正在分析是否需要调用工具…"}` | planner 正在规划 / 整理，给前端一个可见的等待态 |
+| tool_call | `{"type":"tool_call","callId":"call_1","tool":"search_my_history","label":"搜索我的历史对话","args":{"query":"…"}}` | 模型发起一次工具调用；后端已校验工具名，执行前推送 |
+| tool_result | `{"type":"tool_result","callId":"call_1","status":"OK","summary":"找到 2 条…","durationMs":50,"ui":{"citations":[…]}}` | 执行结束。`ui` 可选，只给前端当轮渲染卡片（历史检索的引用卡），**自身不落库、不回灌模型**；为空时字段整个省略。citations 另由 `ToolCitation` 持久化到 `message_citation`，刷新后随 `GET /messages` 返回 |
 
 `reasoning` 只是过程展示，不属于正文：正文永远是 delta 拼出来的回答。思考全文在生成结束时随助手消息入库（`message.reasoning`），刷新后折叠块还能重读；没开思考时该列为 NULL、也不下发。前端不认识某个 `type` 直接忽略即可。
 
@@ -145,13 +148,15 @@ curl.exe -s -i -X POST http://localhost:8089/api/conversations/1/chat -H $h -H "
 
     auth/        TokenService、AuthInterceptor、CurrentUser 及其 ArgumentResolver、RequireAdmin、Roles、AuthProperties
     controller/  REST 入口：Auth / Conversation / Chat / User / Attachment / Llm / AdminUser / AdminAudit / Blog
-    service/     Chat（SSE 编排 / 取消 / 历史截断 / 自动标题 / 多模态 / 记忆与摘要注入 / Agent 接入）、Agent（planner 循环）、AgentToolCallStore、Conversation、User、Attachment、Memory、ConversationSummary + Store、LlmText、Blog、BlogPolicy、
+    service/     Chat（SSE 编排 / 取消 / 历史截断 / 自动标题 / 多模态 / 记忆与摘要注入 / Agent 接入）、Agent（planner 循环）、AgentToolCallStore、Conversation、HistorySearch（ngram 检索 + 相关性过滤 + LIKE 兜底）、User、Attachment、Memory、ConversationSummary + Store、LlmText、Blog、BlogPolicy、
                  AdminUser（单条 + 自我保护）、AdminUserBatch（批量编排）、AdminAudit
     repository/  Spring Data JPA：Conversation / Message / User / Attachment / BlogPost / UserMemory / AgentToolCall
     entity/      Conversation / Message / User / Attachment / Role / AdminAuditLog / BlogPost / PostStatus / UserMemory / MemoryKind / MemorySource / MemoryStatus / AgentToolCall
     dto/         请求与响应对象，含 ErrorResponse、ChatEvent、AttachmentVO、分页与管理端 VO、博客 BlogPostVO/BlogPostSummaryVO/BlogPostSummaryView/SaveBlogPostRequest
-    llm/         LlmClient + LlmStreamListener + Mock 与 OpenAI 兼容实现 + LlmContentPart
-    config/      WebConfig（CORS + 拦截器 + 参数解析器）、CorsProperties、AuthConfig、LlmConfig、
+    llm/         LlmClient + LlmStreamListener + Mock 与 OpenAI 兼容实现 + LlmContentPart + LlmTool / LlmToolCall / LlmTurn
+    tool/        Tool 协议 + ToolContext / ToolResult / ToolRegistry + 6 个只读工具
+                 （search_blog / get_blog_post / calculator / search_my_history / read_conversation / list_my_conversations）
+    config/      WebConfig（CORS + 拦截器 + 参数解析器）、CorsProperties、AuthConfig、LlmConfig、MessageSearchIndexInitializer、
                  SeedUserInitializer、GlobalExceptionHandler
 
 ## 后续待加

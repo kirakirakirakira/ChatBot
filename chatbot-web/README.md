@@ -64,10 +64,13 @@ npm run type-check   # vue-tsc --build，只跑类型检查
 ## Agent 工具时间线
 
 - `ChatEvent` 新增 `agent_status` / `tool_call` / `tool_result`；`api.ts` 的 `StreamHandlers` 对应新增三个可选回调。
-- `ChatView` 把工具步骤写进当前 `UiMessage.agentSteps`：`tool_call` 建 running 步骤，`tool_result` 回填 ok/error、summary、durationMs。
+- `ChatView` 把工具步骤写进当前 `UiMessage.agentSteps`：`tool_call` 建 running 步骤，`tool_result` 回填 ok/error、summary、durationMs、ui。
 - `AgentTimeline.vue` 在助手正文之前渲染：显示“正在分析…” / “搜索站内博客 → 找到 1 篇 → 完成”，参数可折叠查看。
-- 时间线只存在于当轮流式期间；工具日志已落库，但 MVP 没有历史重放接口，刷新后只保留最终回答。
+- 历史检索的 `tool_result.ui.citations` 会渲染成可点击引用卡：标题 + 片段 + 时间 + 角色。点击走 `/chat?c=<会话>&m=<消息>` 深链；`m` 省略时只打开会话。
+- 查询过程 + 引用卡是一个 `<details>` 折叠块：流式期间默认展开，点摘要可随时手动折叠；刷新 / 切会话后把 `MessageVO.toolCalls` 映射回 `agentSteps` 并标记 `agentReplay`，默认折叠成「查询过程（N 步）· 引用（M 条）」。
+- 引用卡与步骤在同一个折叠块里：流式期间从 `agentSteps[].ui.citations` 取，刷新后从 `message.citations` 取；折叠摘要同时显示「查询过程（N 步）· 引用（M 条）」。
 - 停止生成会 abort fetch，后端在下一步工具调用前检查取消；已完成的工具结果不会丢。
+- 深链定位：`ChatView` 挂载时优先读 `?c=&m=`；目标不在最新 50 条时，用现有 `before` 游标再取一页让它落进窗口（不新增后端接口）。定位后顶部显示「已定位到历史消息 / 回到最新」，`MessageBubble` 用 `data-message-id` 当锚点闪 2.6 秒。
 
 ## SSE 流式解析
 
@@ -138,7 +141,9 @@ npm run type-check   # vue-tsc --build，只跑类型检查
       components/
         ConversationSidebar.vue  会话列表：新建 / 删除 / 双击改名
         MessageBubble.vue        消息气泡：助手走 Markdown，用户纯文本 + 图片缩略图 + 思考折叠 + Agent 时间线 + 重新生成
-        AgentTimeline.vue        Agent 工具步骤：规划状态 + 工具调用 + 结果摘要 + 耗时
+        AgentTimeline.vue        查询过程 + 引用卡外壳：流式展开；刷新后折叠成「查询过程（N 步）· 引用（M 条）」
+        AgentStepList.vue        工具步骤列表：状态点 + 工具名 + 耗时 + 参数折叠 + 结果摘要
+        CitationList.vue         引用卡列表：流式期间（ui.citations）与刷新后（MessageVO.citations）共用
         AttachmentThumb.vue      单图缩略图：有本地 url 直接用，只有 id 时 fetch 字节转 objectURL
         MarkdownContent.vue      Markdown 容器：代码高亮 + 复制按钮 + 流式光标
         ChangePasswordDialog.vue 修改密码；force 模式关不掉（管理员重置过密码）

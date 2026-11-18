@@ -8,6 +8,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.util.List;
+import java.util.Optional;
 
 public interface MessageRepository extends JpaRepository<Message, Long> {
 
@@ -41,6 +42,50 @@ public interface MessageRepository extends JpaRepository<Message, Long> {
 
     /** 某会话中还没被摘要覆盖的消息数。 */
     long countByConversationIdAndIdGreaterThan(Long conversationId, Long afterId);
+
+    /** 跨会话定位单条消息时用：必须同时带 conversation_id，免得只凭 message id 读到别的会话。 */
+    Optional<Message> findByIdAndConversationId(Long id, Long conversationId);
+
+    /**
+     * 「第二大脑」主检索：MySQL ngram 全文索引。
+     * <p>
+     * 只查当前用户自己的消息——owner 条件写在 conversation 上，绝不能省。
+     * 排序列和 WHERE 里的 MATCH 必须完全一致，MySQL 才会复用同一个 relevance 值。
+     * excludeConversationId 由调用方传 -1 表示不排除（SQL 里 {@code <> NULL} 恒为 NULL，不能直接传 null）。
+     */
+    @Query(value = """
+            select m.id, m.conversation_id, c.title, m.role, m.content, m.created_at
+            from message m
+            join conversation c on c.id = m.conversation_id
+            where c.owner_id = :ownerId
+              and m.conversation_id <> :excludeConversationId
+              and match(m.content) against (:query in natural language mode)
+            order by match(m.content) against (:query in natural language mode) desc, m.id desc
+            limit :limit
+            """, nativeQuery = true)
+    List<Object[]> searchOwnedFullText(@Param("ownerId") Long ownerId,
+                                       @Param("excludeConversationId") Long excludeConversationId,
+                                       @Param("query") String query,
+                                       @Param("limit") int limit);
+
+    /**
+     * 全文索引不可用（还没建好 / 分词器不支持）或全文没命中时的兜底。
+     * LIKE '%关键词%' 扫的是当前用户的消息，量级可控；不追求相关性排序，按时间倒序即可。
+     */
+    @Query(value = """
+            select m.id, m.conversation_id, c.title, m.role, m.content, m.created_at
+            from message m
+            join conversation c on c.id = m.conversation_id
+            where c.owner_id = :ownerId
+              and m.conversation_id <> :excludeConversationId
+              and m.content like concat('%', :query, '%')
+            order by m.id desc
+            limit :limit
+            """, nativeQuery = true)
+    List<Object[]> searchOwnedLike(@Param("ownerId") Long ownerId,
+                                   @Param("excludeConversationId") Long excludeConversationId,
+                                   @Param("query") String query,
+                                   @Param("limit") int limit);
 
     /**
      * 删除某会话的全部消息。用 @Modifying + JPQL 而不是派生 deleteBy：

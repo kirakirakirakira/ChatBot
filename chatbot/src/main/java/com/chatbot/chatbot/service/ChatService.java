@@ -18,6 +18,7 @@ import com.chatbot.chatbot.llm.LlmStreamListener;
 import com.chatbot.chatbot.repository.AttachmentRepository;
 import com.chatbot.chatbot.repository.ConversationRepository;
 import com.chatbot.chatbot.repository.MessageRepository;
+import com.chatbot.chatbot.tool.ToolCitation;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -85,6 +86,8 @@ public class ChatService {
     private final MemoryExtractionService memoryExtractionService;
     private final ConversationSummaryService conversationSummaryService;
     private final AgentService agentService;
+    private final AgentToolCallStore agentToolCallStore;
+    private final MessageCitationStore messageCitationStore;
     private final LlmClient llmClient;
     private final LlmProperties llmProperties;
     private final ObjectMapper objectMapper;
@@ -105,6 +108,8 @@ public class ChatService {
                        MemoryExtractionService memoryExtractionService,
                        ConversationSummaryService conversationSummaryService,
                        AgentService agentService,
+                       AgentToolCallStore agentToolCallStore,
+                       MessageCitationStore messageCitationStore,
                        LlmClient llmClient,
                        LlmProperties llmProperties,
                        ObjectMapper objectMapper) {
@@ -117,6 +122,8 @@ public class ChatService {
         this.memoryExtractionService = memoryExtractionService;
         this.conversationSummaryService = conversationSummaryService;
         this.agentService = agentService;
+        this.agentToolCallStore = agentToolCallStore;
+        this.messageCitationStore = messageCitationStore;
         this.llmClient = llmClient;
         this.llmProperties = llmProperties;
         this.objectMapper = objectMapper;
@@ -301,8 +308,12 @@ public class ChatService {
         // 用量：prompt / completion / reasoning。回调和读取都在本虚拟线程里，普通数组就够。
         // 拿不到就保持 null——不填 0 冒充真实值，界面对 null 显示「—」。
         final Integer[] usage = new Integer[3];
+        // 工具产生的引用：prepare 阶段就已经确定；等助手消息入库拿到 id 后再持久化。
+        // 放在 try 外面是为了 catch 里保存「部分回复」时也能把引用一起写上。
+        List<ToolCitation> citations = List.of();
+        List<String> toolCallIds = List.of();
         try {
-            List<LlmMessage> finalHistory = agentService.prepare(conversation, user, history, options,
+            AgentService.PreparedTurn prepared = agentService.prepare(conversation, user, history, options,
                     new AgentObserver() {
                         @Override
                         public void onEvent(ChatEvent event) {
@@ -314,6 +325,9 @@ public class ChatService {
                             ChatService.checkCancelled(cancelled);
                         }
                     });
+            citations = prepared.citations();
+            toolCallIds = prepared.toolCallIds();
+            List<LlmMessage> finalHistory = prepared.messages();
             llmClient.streamChat(finalHistory, options, new LlmStreamListener() {
                 @Override
                 public void onReasoning(String text) {
@@ -347,6 +361,8 @@ public class ChatService {
                 log.debug("流结束时仍有落单的高位代理字符，已跳过推送 conversationId={}", conversation.getId());
             }
             Message saved = saveAssistant(conversation, full.toString(), reasoningFull.toString(), options, usage);
+            saveCitations(saved, conversation, citations);
+            attachToolCalls(conversation, user, saved, toolCallIds);
             send(emitter, ChatEvent.done(saved));
             emitter.complete();
             // 记忆抽取 / 摘要都在 SSE 结束之后异步跑：失败只记日志，不影响用户已经看到的回答
@@ -364,11 +380,15 @@ public class ChatService {
             }
         } catch (StreamAbortedException e) {
             // 用户停止 / 页面关闭 / 超时：保留已生成内容，不再往前端写任何东西
-            savePartial(conversation, full, reasoningFull, options, usage, "生成被中断");
+            Message saved = savePartial(conversation, full, reasoningFull, options, usage, "生成被中断");
+            saveCitations(saved, conversation, citations);
+            attachToolCalls(conversation, user, saved, toolCallIds);
             completeQuietly(emitter);
         } catch (Exception e) {
             log.warn("对话生成失败 conversationId={}", conversation.getId(), e);
-            savePartial(conversation, full, reasoningFull, options, usage, "生成失败");
+            Message saved = savePartial(conversation, full, reasoningFull, options, usage, "生成失败");
+            saveCitations(saved, conversation, citations);
+            attachToolCalls(conversation, user, saved, toolCallIds);
             // 错误已经用 SSE 事件告诉前端了，这里正常 complete 即可：
             // completeWithError(e) 会让 Spring 把异常抛回已提交的 text/event-stream，日志多一条没意义的 IllegalStateException
             sendQuietly(emitter, ChatEvent.error(describe(e)));
@@ -411,17 +431,51 @@ public class ChatService {
         }
     }
 
-    private void savePartial(Conversation conversation, StringBuilder full, StringBuilder reasoning,
-                             LlmCallOptions options, Integer[] usage, String reason) {
+    private Message savePartial(Conversation conversation, StringBuilder full, StringBuilder reasoning,
+                                LlmCallOptions options, Integer[] usage, String reason) {
         if (full.isEmpty()) {
             // 思考阶段就被中断：一条没有正文的助手消息没有意义，思考也不单独留
+            return null;
+        }
+        try {
+            Message saved = saveAssistant(conversation, full.toString(), reasoning.toString(), options, usage);
+            log.debug("{}，已保存部分回复 conversationId={}", reason, conversation.getId());
+            return saved;
+        } catch (Exception e) {
+            log.warn("{}，保存部分回复失败 conversationId={}", reason, conversation.getId(), e);
+            return null;
+        }
+    }
+
+    /** 把本轮工具调用挂到助手消息上，刷新后时间线才能折叠回放。失败只记日志。 */
+    private void attachToolCalls(Conversation conversation, CurrentUser user, Message message,
+                                 List<String> callIds) {
+        if (message == null || callIds.isEmpty()) {
             return;
         }
         try {
-            saveAssistant(conversation, full.toString(), reasoning.toString(), options, usage);
-            log.debug("{}，已保存部分回复 conversationId={}", reason, conversation.getId());
+            int attached = agentToolCallStore.attachToMessage(
+                    conversation.getId(), user.id(), callIds, message.getId());
+            if (attached > 0) {
+                log.debug("工具时间线已挂到消息 messageId={} count={}", message.getId(), attached);
+            }
         } catch (Exception e) {
-            log.warn("{}，保存部分回复失败 conversationId={}", reason, conversation.getId(), e);
+            log.warn("工具时间线回填失败 messageId={}: {}", message.getId(), describe(e));
+        }
+    }
+
+    /** 引用落库失败只记日志：回答已经展示给用户了，不能因为引用写失败反过来报错。 */
+    private void saveCitations(Message message, Conversation conversation, List<ToolCitation> citations) {
+        if (message == null || citations.isEmpty()) {
+            return;
+        }
+        try {
+            int saved = messageCitationStore.save(message.getId(), conversation.getId(), citations);
+            if (saved > 0) {
+                log.debug("引用已落库 messageId={} count={}", message.getId(), saved);
+            }
+        } catch (Exception e) {
+            log.warn("引用落库失败 messageId={}: {}", message.getId(), describe(e));
         }
     }
 

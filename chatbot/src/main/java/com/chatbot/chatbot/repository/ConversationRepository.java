@@ -1,6 +1,7 @@
 package com.chatbot.chatbot.repository;
 
 import com.chatbot.chatbot.entity.Conversation;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -16,6 +17,26 @@ public interface ConversationRepository extends JpaRepository<Conversation, Long
      * 走 idx_conversation_owner_updated（owner_id + updated_at 复合索引），排序不用回表。
      */
     List<Conversation> findAllByOwnerIdOrderByUpdatedAtDesc(Long ownerId);
+
+    /** 同上，但带页大小限制；「列出我的会话」工具只取前 N 条，不需要把全量列表拖回来。 */
+    List<Conversation> findByOwnerIdOrderByUpdatedAtDesc(Long ownerId, Pageable pageable);
+
+    /** 按标题找会话（大小写不敏感）；标题是 varchar(100)，LIKE 成本可接受。 */
+    List<Conversation> findByOwnerIdAndTitleContainingIgnoreCaseOrderByUpdatedAtDesc(
+            Long ownerId, String keyword, Pageable pageable);
+
+    /**
+     * 标题或摘要命中关键词。摘要可能很长，但只扫当前用户自己的会话，量级可控；
+     * 它的价值是「只记得主题、不记得原话」时把会话找出来，真正的消息级命中走 MessageRepository 的全文检索。
+     */
+    @Query("select c from Conversation c where c.owner.id = :ownerId and c.id <> :excludeId "
+            + "and (lower(c.title) like lower(concat('%', :query, '%')) "
+            + "or lower(coalesce(c.summary, '')) like lower(concat('%', :query, '%'))) "
+            + "order by c.updatedAt desc")
+    List<Conversation> searchOwnedByKeyword(@Param("ownerId") Long ownerId,
+                                            @Param("excludeId") Long excludeId,
+                                            @Param("query") String query,
+                                            Pageable pageable);
 
     /**
      * 按 id + 归属查单个会话，业务代码取会话只准用这个。
